@@ -4,7 +4,7 @@ Hostinger-compatible Node.js and MySQL edition of the RyanKey Designs multi-merc
 
 ## Hostinger settings
 
-- Branch: `hostinger-phase2`
+- Branch: `main`
 - Node.js: 20 or newer
 - Build command: `npm install`
 - Start command: `npm start`
@@ -19,5 +19,7 @@ The application creates its tables automatically on first successful startup. Me
 - `/login` — administrator login
 - `/admin` — dashboard
 - `/r/:slug` — public merchant review assistant
+
+Production URL: `https://google-review.ryankey.com.my`
 
 The system does not select a rating or publish a Google review on behalf of a customer.

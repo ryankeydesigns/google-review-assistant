@@ -62,7 +62,7 @@ const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req,
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 const id = () => crypto.randomUUID();
 const languageName = (value) => value === "zh" ? "中文" : value === "ms" ? "Bahasa Melayu" : "English";
-const publicBase = () => (process.env.PUBLIC_BASE_URL || "https://review.ryankey.com.my").replace(/\/$/, "");
+const publicBase = () => (process.env.PUBLIC_BASE_URL || "https://google-review.ryankey.com.my").replace(/\/$/, "");
 
 const navItems = [
   ["overview", "/admin", "总览"],
