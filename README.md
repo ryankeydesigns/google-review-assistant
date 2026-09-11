@@ -25,7 +25,7 @@ const merchantConfig = {
   industry: "Your Industry",
   language: "zh",
   googleReviewLink: "OFFICIAL_GOOGLE_REVIEW_LINK",
-  logo: "images/logo.png",
+  logo: "images/logo.svg",
   primaryColor: "#2563EB",
   poweredBy: "RyanKey Designs",
   isDemo: false,
