@@ -1,0 +1,21 @@
+{
+  "name": "google-review-assistant-hostinger",
+  "version": "2.0.0",
+  "private": true,
+  "description": "RyanKey Designs multi-merchant Google Review Assistant for Hostinger",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "dependencies": {
+    "compression": "^1.8.1",
+    "express": "^5.1.0",
+    "express-mysql-session": "^3.0.3",
+    "express-session": "^1.18.2",
+    "helmet": "^8.1.0",
+    "multer": "^2.0.2",
+    "mysql2": "^3.14.5",
+    "qrcode": "^1.5.4"
+  }
+}

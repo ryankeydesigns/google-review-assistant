@@ -1,46 +1,23 @@
-# Google Review Assistant
+# Google Review Assistant — Hostinger Phase 2
 
-A mobile-first Google Review copy assistant by RyanKey Designs.
+Hostinger-compatible Node.js and MySQL edition of the RyanKey Designs multi-merchant Google Review Assistant.
 
-Customers can generate a review draft, copy it to their clipboard, and continue to the merchant's official Google Review page. The customer remains responsible for editing the text according to their real experience, choosing a rating, and publishing the review.
+## Hostinger settings
 
-## Features
+- Branch: `hostinger-phase2`
+- Node.js: 20 or newer
+- Build command: `npm install`
+- Start command: `npm start`
+- Health check: `/health`
 
-- Pure HTML, CSS and JavaScript
-- Mobile-first responsive design
-- Chinese and English review libraries
-- Random review combinations
-- Clipboard API with manual-copy fallback
-- Same-page redirect to the official Google Review link
-- Duplicate-click protection
-- No database, login or paid API
+Create a MySQL database in hPanel and add every variable from `.env.example` to the Hostinger Web App environment settings. Never commit real passwords.
 
-## Merchant configuration
+The application creates its tables automatically on first successful startup. Merchant logos are stored inside MySQL so they survive application redeployments.
 
-Edit the `merchantConfig` section at the top of `script.js`:
+## URLs
 
-```javascript
-const merchantConfig = {
-  businessName: "Your Business Name",
-  industry: "Your Industry",
-  language: "zh",
-  googleReviewLink: "OFFICIAL_GOOGLE_REVIEW_LINK",
-  logo: "images/logo.svg",
-  primaryColor: "#2563EB",
-  poweredBy: "RyanKey Designs",
-  isDemo: false,
-  redirectDelayMs: 1300
-};
-```
+- `/login` — administrator login
+- `/admin` — dashboard
+- `/r/:slug` — public merchant review assistant
 
-Obtain the official review link from the merchant's Google Business Profile. Do not guess the link.
-
-## Responsible use
-
-Generated text is a draft only. Customers should revise it based on their genuine experience and choose their own rating. The system does not select stars, publish reviews, collect Google credentials, or store review content.
-
-## Deployment
-
-The repository can be published using GitHub Pages or any HTTPS web host. HTTPS is required for reliable clipboard access on mobile browsers.
-
-Powered by [RyanKey Designs](https://ryankey.com.my/).
+The system does not select a rating or publish a Google review on behalf of a customer.
