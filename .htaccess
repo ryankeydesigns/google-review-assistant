@@ -1,6 +1,0 @@
-RewriteEngine On
-
-# Send the Hostinger review subdomain to the Phase 2 application.
-# Preserve merchant paths such as /r/business-slug and any query string.
-RewriteCond %{HTTP_HOST} ^(www\.)?review\.ryankey\.com\.my$ [NC]
-RewriteRule ^(.*)$ https://google-review-assistant-demo.hazy-river-2109.chatgpt.site/$1 [R=302,L,NE,QSA]
