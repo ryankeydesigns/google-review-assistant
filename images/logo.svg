@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Demo Coffee House</title>
+  <rect width="256" height="256" rx="56" fill="#eaf0ff"/>
+  <path d="M67 82h102v54c0 34-23 58-51 58s-51-24-51-58V82Z" fill="#2563eb"/>
+  <path d="M169 100h15c19 0 31 12 31 29s-12 29-31 29h-16" fill="none" stroke="#2563eb" stroke-width="17" stroke-linecap="round"/>
+  <path d="M93 60c-7-13 9-18 2-31M127 60c-7-13 9-18 2-31M161 60c-7-13 9-18 2-31" fill="none" stroke="#2563eb" stroke-width="10" stroke-linecap="round"/>
+</svg>
