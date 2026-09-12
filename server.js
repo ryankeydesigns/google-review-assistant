@@ -53,7 +53,15 @@ app.use(session({
 app.use((req, res, next) => {
   if (req.method !== "POST" || !req.headers.origin) return next();
   try {
-    if (new URL(req.headers.origin).host !== req.get("host")) return res.status(403).send("Invalid request origin");
+    const requestOrigin = new URL(req.headers.origin).origin;
+    const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+    const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+    const allowedOrigins = new Set([
+      new URL(publicBase()).origin,
+      `${req.protocol}://${req.get("host")}`,
+      forwardedHost ? `${forwardedProto}://${forwardedHost}` : "",
+    ].filter(Boolean));
+    if (!allowedOrigins.has(requestOrigin)) return res.status(403).send("Invalid request origin");
   } catch { return res.status(403).send("Invalid request origin"); }
   next();
 });
