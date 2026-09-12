@@ -382,6 +382,16 @@ textarea:focus {
   padding: 12px;
   resize: vertical;
 }
+.template-add select {
+  width: 100%;
+  height: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f9fafb;
+  color: var(--ink);
+  font-weight: 700;
+}
 .template-add .button {
   justify-self: end;
 }
@@ -396,6 +406,23 @@ textarea:focus {
   flex: 1;
   margin: 0;
   line-height: 1.6;
+}
+.language-badge,
+.language-counts span {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.language-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .icon-danger {
   width: 32px;
@@ -532,6 +559,30 @@ textarea:focus {
 .notice.success {
   background: #ecfdf3;
   color: #067647;
+}
+.language-switch {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin: 0 0 24px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f1f5f9;
+}
+.language-switch a {
+  padding: 9px 8px;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: background .2s ease, color .2s ease, box-shadow .2s ease;
+}
+.language-switch a.active {
+  background: #fff;
+  color: var(--brand, var(--blue));
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
 }
 .merchant-logo {
   display: block;
