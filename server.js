@@ -190,7 +190,7 @@ function layout(title, content, options = {}) {
   let shell = content;
   if (admin) shell = `<div class="admin-shell"><aside class="sidebar"><a class="brand" href="/admin"><span class="brand-mark">R</span><span><b>REVIEW CONTROL</b><small>RyanKey Designs</small></span></a><nav>${navItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(process.env.ADMIN_EMAIL || "Administrator")}</b><small>Platform Owner</small><form method="post" action="/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
   if (client) shell = `<div class="admin-shell client-shell"><aside class="sidebar"><a class="brand" href="/client"><span class="brand-mark">R</span><span><b>MERCHANT PORTAL</b><small>Google Review Assistant</small></span></a><nav>${clientNavItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(client.name)}</b><small>${escapeHtml(client.client_email || "Client Account")}</small><form method="post" action="/client/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
-  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=9"></head><body>${shell}</body></html>`;
+  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=10"></head><body>${shell}</body></html>`;
 }
 
 function requireAdmin(req, res, next) {
@@ -293,6 +293,11 @@ async function normalizeReviewAdditionCharges() {
     const note = additionNumber <= 3 ? `第 ${additionNumber} 条自定义评价（免费）` : `第 ${additionNumber} 条自定义评价（扣10分）`;
     await pool.query("UPDATE usage_ledger SET points_delta=?,note=? WHERE id=?", [points, note, row.id]);
   }
+}
+
+async function normalizeGenerationCharges() {
+  await pool.query("UPDATE usage_ledger SET points_delta=0,note='客户进入评价页面（仅统计）' WHERE event_type='visit' AND points_delta<>0");
+  await pool.query("UPDATE usage_ledger SET points_delta=-1,note='客户生成评价（扣1分）' WHERE event_type='review_generated' AND points_delta<>-1");
 }
 
 async function addCustomReviewTemplate(merchantId, language, content) {
@@ -608,12 +613,12 @@ app.get("/admin/reports", requireAdmin, asyncRoute(async (req, res) => {
       COUNT(CASE WHEN event_type='review_added' THEN 1 END) added,
       COALESCE(-SUM(CASE WHEN points_delta<0 THEN points_delta ELSE 0 END),0) points_used
       FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<?`, [selectedMerchant.id, start, end]),
-    pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC", [selectedMerchant.id, start, end]),
+    pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND event_type<>'visit' AND created_at>=? AND created_at<? ORDER BY created_at DESC", [selectedMerchant.id, start, end]),
     pool.query("SELECT COALESCE(SUM(points_delta),0) balance FROM usage_ledger WHERE merchant_id=?", [selectedMerchant.id]),
   ]);
   const summary = summaryRows[0] || {};
   const filters = `<form class="report-filters" method="get"><label>选择商家<select name="merchantId">${merchants.map((merchant) => `<option value="${merchant.id}" ${merchant.id === selectedMerchant.id ? "selected" : ""}>${escapeHtml(merchant.name)}</option>`).join("")}</select></label><label>选择月份<input type="month" name="month" value="${month}" required></label><button class="button primary" type="submit">查看报告</button><a class="button" href="/admin/reports.csv?merchantId=${selectedMerchant.id}&month=${month}">下载 CSV</a></form>`;
-  const cards = [["进入次数", Number(summary.visits) || 0, "每次扣 1 分"], ["独立访客", Number(summary.unique_visitors) || 0, "按装置匿名统计"], ["使用评价", Number(summary.generated) || 0, "已生成的评价"], ["本月使用", `${Number(summary.points_used) || 0} 分`, `余额 ${Number(balanceRows[0]?.balance) || 0} 分`]];
+  const cards = [["进入次数", Number(summary.visits) || 0, "只统计，不扣点数"], ["独立访客", Number(summary.unique_visitors) || 0, "按装置匿名统计"], ["使用评价", Number(summary.generated) || 0, "每次生成扣 1 分"], ["本月使用", `${Number(summary.points_used) || 0} 分`, `余额 ${Number(balanceRows[0]?.balance) || 0} 分`]];
   const rows = records.map((record) => `<tr><td>${formatDateTime(record.created_at)}</td><td>${usageLabel(record.event_type)}</td><td>${record.language ? languageName(record.language) : "—"}</td><td class="review-copy">${escapeHtml(record.review_text || record.note || "—")}</td><td class="points ${Number(record.points_delta) < 0 ? "negative" : Number(record.points_delta) > 0 ? "positive" : ""}">${Number(record.points_delta) > 0 ? "+" : ""}${Number(record.points_delta)} 分</td></tr>`).join("");
   res.send(layout("客户报告", `<header class="page-head"><div><p class="eyebrow">CUSTOMER REPORT</p><h1>客户报告</h1><p>查看每个商家的访问人数、使用评价及点数记录。</p></div></header><section class="panel report-panel">${filters}</section><section class="stats report-stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="panel"><div class="panel-head"><h2>${escapeHtml(selectedMerchant.name)} · ${month}</h2><p>此月份的全部客户使用及收费记录</p></div>${rows ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>记录</th><th>语言</th><th>使用的评价／说明</th><th>点数</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">此月份还没有记录</div>`}</section>`, { admin: true, active: "reports" }));
 }));
@@ -623,7 +628,7 @@ app.get("/admin/reports.csv", requireAdmin, asyncRoute(async (req, res) => {
   const [start, end] = monthBounds(month);
   const [[merchants], [records]] = await Promise.all([
     pool.query("SELECT id,name,slug FROM merchants WHERE id=? LIMIT 1", [req.query.merchantId]),
-    pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<? ORDER BY created_at", [req.query.merchantId, start, end]),
+    pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND event_type<>'visit' AND created_at>=? AND created_at<? ORDER BY created_at", [req.query.merchantId, start, end]),
   ]);
   const merchant = merchants[0];
   if (!merchant) return res.status(404).send("Merchant not found");
@@ -646,18 +651,18 @@ function topupSuccessButton(transaction) {
 app.get("/admin/billing", requireAdmin, asyncRoute(async (req, res) => {
   const [[merchants], [transactions]] = await Promise.all([
     pool.query(`SELECT m.id,m.name,m.slug,COALESCE(SUM(u.points_delta),0) balance,
-      COUNT(CASE WHEN u.event_type='visit' THEN 1 END) visits,
+      COUNT(CASE WHEN u.event_type='review_generated' THEN 1 END) generated,
       COUNT(CASE WHEN u.event_type='review_added' THEN 1 END) reviews_added,
       COALESCE(-SUM(CASE WHEN u.points_delta<0 THEN u.points_delta ELSE 0 END),0) points_used
       FROM merchants m LEFT JOIN usage_ledger u ON u.merchant_id=m.id GROUP BY m.id ORDER BY m.name`),
     pool.query(`SELECT u.event_type,u.points_delta,u.note,u.created_at,m.name,m.client_email,m.client_phone,
       (SELECT COALESCE(SUM(balance_entry.points_delta),0) FROM usage_ledger balance_entry WHERE balance_entry.merchant_id=u.merchant_id) current_balance
       FROM usage_ledger u JOIN merchants m ON m.id=u.merchant_id
-      WHERE u.event_type IN ('topup','topup_request','visit','review_added') ORDER BY u.created_at DESC LIMIT 50`),
+      WHERE u.event_type IN ('topup','topup_request','review_generated','review_added') ORDER BY u.created_at DESC LIMIT 50`),
   ]);
-  const merchantCards = merchants.map((merchant) => `<article class="billing-card"><div class="billing-head"><div><p class="eyebrow">${escapeHtml(merchant.slug)}</p><h2>${escapeHtml(merchant.name)}</h2></div><strong class="balance ${Number(merchant.balance) < 0 ? "low" : ""}">${Number(merchant.balance)}<small>分</small></strong></div><div class="usage-split"><span><b>${Number(merchant.visits)}</b><small>进入次数 × 1分</small></span><span><b>${Number(merchant.reviews_added)}</b><small>新增评价 × 10分</small></span><span><b>${Number(merchant.points_used)}</b><small>累计使用分数</small></span></div><p class="topup-title">人工充值 · RM1 = 1分</p><div class="topup-options">${Object.values(topupPackages).map((item) => `<form method="post" action="/admin/billing/topup" onsubmit="return confirm('确认已收款 RM${item.amount}，并充值 ${item.points} 分？')"><input type="hidden" name="merchantId" value="${merchant.id}"><input type="hidden" name="amount" value="${item.amount}"><button type="submit">RM${item.amount}<small>+${item.points}分</small></button></form>`).join("")}</div><a class="report-link" href="/admin/reports?merchantId=${merchant.id}">查看客户报告 →</a></article>`).join("");
+  const merchantCards = merchants.map((merchant) => `<article class="billing-card"><div class="billing-head"><div><p class="eyebrow">${escapeHtml(merchant.slug)}</p><h2>${escapeHtml(merchant.name)}</h2></div><strong class="balance ${Number(merchant.balance) < 0 ? "low" : ""}">${Number(merchant.balance)}<small>分</small></strong></div><div class="usage-split"><span><b>${Number(merchant.generated)}</b><small>生成评价 × 1分</small></span><span><b>${Number(merchant.reviews_added)}</b><small>新增评价 × 10分</small></span><span><b>${Number(merchant.points_used)}</b><small>累计使用分数</small></span></div><p class="topup-title">人工充值 · RM1 = 1分</p><div class="topup-options">${Object.values(topupPackages).map((item) => `<form method="post" action="/admin/billing/topup" onsubmit="return confirm('确认已收款 RM${item.amount}，并充值 ${item.points} 分？')"><input type="hidden" name="merchantId" value="${merchant.id}"><input type="hidden" name="amount" value="${item.amount}"><button type="submit">RM${item.amount}<small>+${item.points}分</small></button></form>`).join("")}</div><a class="report-link" href="/admin/reports?merchantId=${merchant.id}">查看客户报告 →</a></article>`).join("");
   const transactionRows = transactions.map((transaction) => `<tr><td>${formatDateTime(transaction.created_at)}</td><td>${escapeHtml(transaction.name)}</td><td>${usageLabel(transaction.event_type)}</td><td>${escapeHtml(transaction.note || "—")}</td><td class="points ${Number(transaction.points_delta) < 0 ? "negative" : Number(transaction.points_delta) > 0 ? "positive" : ""}">${Number(transaction.points_delta) > 0 ? "+" : ""}${Number(transaction.points_delta)} 分</td><td>${topupSuccessButton(transaction)}</td></tr>`).join("");
-  res.send(layout("点数收费", `<header class="page-head"><div><p class="eyebrow">USAGE & BILLING</p><h1>点数收费</h1><p>RM1 等于 1 分；客户每次进入扣 1 分，新增每条评价一次性扣 10 分。</p></div></header>${req.query.toppedUp ? `<div class="notice success">充值完成，已加入 ${Number(req.query.toppedUp)} 分。</div>` : ""}<section class="billing-grid">${merchantCards || `<div class="empty">还没有商家</div>`}</section><section class="panel"><div class="panel-head"><h2>最近点数记录</h2><p>显示最近 50 条充值与扣分记录</p></div>${transactionRows ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>商家</th><th>项目</th><th>说明</th><th>点数</th><th>通知商家</th></tr></thead><tbody>${transactionRows}</tbody></table></div>` : `<div class="empty">还没有点数记录</div>`}</section>`, { admin: true, active: "billing" }));
+  res.send(layout("点数收费", `<header class="page-head"><div><p class="eyebrow">USAGE & BILLING</p><h1>点数收费</h1><p>RM1 等于 1 分；客户每次生成评价扣 1 分，新增每条评价一次性扣 10 分。</p></div></header>${req.query.toppedUp ? `<div class="notice success">充值完成，已加入 ${Number(req.query.toppedUp)} 分。</div>` : ""}<section class="billing-grid">${merchantCards || `<div class="empty">还没有商家</div>`}</section><section class="panel"><div class="panel-head"><h2>最近点数记录</h2><p>显示最近 50 条充值与扣分记录；进入评价页只作后台统计</p></div>${transactionRows ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>商家</th><th>项目</th><th>说明</th><th>点数</th><th>通知商家</th></tr></thead><tbody>${transactionRows}</tbody></table></div>` : `<div class="empty">还没有点数记录</div>`}</section>`, { admin: true, active: "billing" }));
 }));
 
 app.post("/admin/billing/topup", requireAdmin, asyncRoute(async (req, res) => {
@@ -677,11 +682,11 @@ app.get("/client", requireClient, asyncRoute(async (req, res) => {
       COUNT(CASE WHEN event_type='review_generated' THEN 1 END) generated,
       COUNT(CASE WHEN event_type='review_added' THEN 1 END) reviews_added
       FROM usage_ledger WHERE merchant_id=?`, [merchant.id]),
-    pool.query("SELECT event_type,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? ORDER BY created_at DESC LIMIT 8", [merchant.id]),
+    pool.query("SELECT event_type,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND event_type<>'visit' ORDER BY created_at DESC LIMIT 8", [merchant.id]),
   ]);
   const summary = summaryRows[0] || {};
   const freeRemaining = Math.max(0, 3 - Number(summary.reviews_added || 0));
-  const cards = [["点数余额", `${Number(summary.balance) || 0} 分`, "充值请联系平台管理员"], ["客户进入", Number(summary.visits) || 0, "每次进入扣1分"], ["使用评价", Number(summary.generated) || 0, "客户已生成评价"], ["免费评价", `${freeRemaining} 条`, "第4条起每条扣10分"]];
+  const cards = [["点数余额", `${Number(summary.balance) || 0} 分`, "充值请联系平台管理员"], ["客户进入", Number(summary.visits) || 0, "只统计，不扣点数"], ["使用评价", Number(summary.generated) || 0, "每次生成扣1分"], ["免费评价", `${freeRemaining} 条`, "第4条起每条扣10分"]];
   const recent = recentRows.map((row) => `<tr><td>${formatDateTime(row.created_at)}</td><td>${usageLabel(row.event_type)}</td><td>${escapeHtml(row.note || "—")}</td><td class="points ${Number(row.points_delta) < 0 ? "negative" : Number(row.points_delta) > 0 ? "positive" : ""}">${Number(row.points_delta) > 0 ? "+" : ""}${Number(row.points_delta)} 分</td></tr>`).join("");
   res.send(layout("客户主页", `<header class="page-head"><div><p class="eyebrow">MERCHANT DASHBOARD</p><h1>${escapeHtml(merchant.name)}</h1><p>管理您的商家资料、评价内容及客户报告。</p></div><a class="button primary" target="_blank" href="/r/${encodeURIComponent(merchant.slug)}">打开客户评价页</a></header><section class="stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="quick-grid"><a href="/client/merchant"><b>商家资料</b><span>更新行业、Google Review Link、品牌颜色及Logo →</span></a><a href="/client/reviews"><b>评价资料库</b><span>管理英文、中文及马来文评价 →</span></a><a href="/client/reports"><b>客户报告</b><span>按月份浏览及下载CSV →</span></a></section><section class="panel"><div class="panel-head"><h2>最近记录</h2><p>您账号最近的使用和点数变化</p></div>${recent ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>项目</th><th>说明</th><th>点数</th></tr></thead><tbody>${recent}</tbody></table></div>` : `<div class="empty">还没有使用记录</div>`}</section>`, { client: merchant, active: "dashboard" }));
 }));
@@ -769,12 +774,12 @@ app.get("/client/reports", requireClient, asyncRoute(async (req, res) => {
       COUNT(CASE WHEN event_type='review_added' THEN 1 END) added,
       COALESCE(-SUM(CASE WHEN points_delta<0 THEN points_delta ELSE 0 END),0) points_used
       FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<?`, [merchant.id, start, end]),
-    pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC", [merchant.id, start, end]),
+    pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND event_type<>'visit' AND created_at>=? AND created_at<? ORDER BY created_at DESC", [merchant.id, start, end]),
     pool.query("SELECT COALESCE(SUM(points_delta),0) balance FROM usage_ledger WHERE merchant_id=?", [merchant.id]),
   ]);
   const summary = summaryRows[0] || {};
   const filters = `<form class="report-filters client-report-filter" method="get"><label>选择月份<input type="month" name="month" value="${month}" required></label><button class="button primary" type="submit">查看报告</button><a class="button" href="/client/reports.csv?month=${month}">下载 CSV</a></form>`;
-  const cards = [["进入次数", Number(summary.visits) || 0, "每次进入扣1分"], ["独立访客", Number(summary.unique_visitors) || 0, "匿名装置统计"], ["使用评价", Number(summary.generated) || 0, "生成评价次数"], ["本月使用", `${Number(summary.points_used) || 0} 分`, `余额 ${Number(balanceRows[0]?.balance) || 0} 分`]];
+  const cards = [["进入次数", Number(summary.visits) || 0, "只统计，不扣点数"], ["独立访客", Number(summary.unique_visitors) || 0, "匿名装置统计"], ["使用评价", Number(summary.generated) || 0, "每次生成扣1分"], ["本月使用", `${Number(summary.points_used) || 0} 分`, `余额 ${Number(balanceRows[0]?.balance) || 0} 分`]];
   const rows = records.map((record) => `<tr><td>${formatDateTime(record.created_at)}</td><td>${usageLabel(record.event_type)}</td><td>${record.language ? languageName(record.language) : "—"}</td><td class="review-copy">${escapeHtml(record.review_text || record.note || "—")}</td><td class="points ${Number(record.points_delta) < 0 ? "negative" : Number(record.points_delta) > 0 ? "positive" : ""}">${Number(record.points_delta) > 0 ? "+" : ""}${Number(record.points_delta)} 分</td></tr>`).join("");
   res.send(layout("客户报告", `<header class="page-head"><div><p class="eyebrow">CUSTOMER REPORT</p><h1>客户报告</h1><p>浏览及下载 ${escapeHtml(merchant.name)} 的月份报告。</p></div></header><section class="panel report-panel">${filters}</section><section class="stats report-stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="panel"><div class="panel-head"><h2>${month} 使用记录</h2><p>客户访问、使用评价及点数记录</p></div>${rows ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>记录</th><th>语言</th><th>使用的评价／说明</th><th>点数</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">此月份还没有记录</div>`}</section>`, { client: merchant, active: "reports" }));
 }));
@@ -784,7 +789,7 @@ app.get("/client/reports.csv", requireClient, asyncRoute(async (req, res) => {
   if (!merchant) return clearClientLogin(req, res);
   const month = validMonth(req.query.month);
   const [start, end] = monthBounds(month);
-  const [records] = await pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<? ORDER BY created_at", [merchant.id, start, end]);
+  const [records] = await pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND event_type<>'visit' AND created_at>=? AND created_at<? ORDER BY created_at", [merchant.id, start, end]);
   const header = ["Date & Time", "Type", "Language", "Review / Note", "Points"];
   const csv = [header, ...records.map((record) => [formatDateTime(record.created_at), usageLabel(record.event_type), record.language ? languageName(record.language) : "", record.review_text || record.note || "", Number(record.points_delta)])].map((row) => row.map(csvCell).join(",")).join("\r\n");
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -817,7 +822,7 @@ app.get("/r/:slug", asyncRoute(async (req, res) => {
     try {
       await connection.beginTransaction();
       await connection.query("INSERT INTO events (id,merchant_id,type) VALUES (?,?, 'scan')", [id(), merchant.id]);
-      await connection.query("INSERT INTO usage_ledger (id,merchant_id,event_type,language,points_delta,visitor_hash,note) VALUES (?,?,?,?,?,?,?)", [id(), merchant.id, "visit", selectedLanguage, -1, visitorHash(req), "客户进入评价页面"]);
+      await connection.query("INSERT INTO usage_ledger (id,merchant_id,event_type,language,points_delta,visitor_hash,note) VALUES (?,?,?,?,?,?,?)", [id(), merchant.id, "visit", selectedLanguage, 0, visitorHash(req), "客户进入评价页面（仅统计）"]);
       await connection.commit();
     } catch (error) {
       await connection.rollback();
@@ -846,7 +851,7 @@ app.post("/api/events", asyncRoute(async (req, res) => {
   try {
     await connection.beginTransaction();
     await connection.query("INSERT INTO events (id,merchant_id,type) VALUES (?,?,?)", [id(), req.body.merchantId, req.body.type]);
-    if (req.body.type === "generate") await connection.query("INSERT INTO usage_ledger (id,merchant_id,event_type,language,review_text,points_delta,note) VALUES (?,?,?,?,?,0,?)", [id(), req.body.merchantId, "review_generated", language, reviewText, "客户使用的评价"]);
+    if (req.body.type === "generate") await connection.query("INSERT INTO usage_ledger (id,merchant_id,event_type,language,review_text,points_delta,note) VALUES (?,?,?,?,?,-1,?)", [id(), req.body.merchantId, "review_generated", language, reviewText, "客户生成评价（扣1分）"]);
     await connection.commit();
   } catch (error) {
     await connection.rollback();
@@ -863,4 +868,4 @@ app.use((error, _req, res, _next) => {
   res.status(error?.code === "ER_DUP_ENTRY" ? 409 : 500).send(layout("系统提示", `<main class="login-page"><section class="login-card"><h1>${message}</h1><a class="button primary" href="/admin">返回管理后台</a></section></main>`));
 });
 
-initDatabase().then(ensureAllTemplateLanguages).then(normalizeReviewAdditionCharges).then(() => app.listen(port, "0.0.0.0", () => console.log(`Google Review Assistant listening on ${port}`))).catch((error) => { console.error(error); process.exit(1); });
+initDatabase().then(ensureAllTemplateLanguages).then(normalizeReviewAdditionCharges).then(normalizeGenerationCharges).then(() => app.listen(port, "0.0.0.0", () => console.log(`Google Review Assistant listening on ${port}`))).catch((error) => { console.error(error); process.exit(1); });

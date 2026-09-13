@@ -34,7 +34,8 @@ The system does not select a rating or publish a Google review on behalf of a cu
 ## Usage billing
 
 - RM1 equals 1 point.
-- Each first entry to a merchant review page deducts 1 point.
+- Entering a merchant review page is recorded for administrator analytics but does not deduct points or appear as an individual report row.
+- Each generated review deducts 1 point.
 - The first three custom review templates per merchant are free; the fourth and each later addition deducts 10 points once.
 - A merchant with 10 points or fewer cannot add another review template until the administrator credits a top-up.
 - Merchant top-up requests are RM100/100 points, RM500/550 points, RM800/880 points, RM1,000/1,100 points and RM1,200/1,440 points.
