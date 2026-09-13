@@ -35,7 +35,9 @@ The system does not select a rating or publish a Google review on behalf of a cu
 - RM1 equals 1 point.
 - Each first entry to a merchant review page deducts 1 point.
 - The first three custom review templates per merchant are free; the fourth and each later addition deducts 10 points once.
-- Manual top-up packages are RM100, RM500, RM800 and RM1,200.
+- A merchant with 10 points or fewer cannot add another review template until the administrator credits a top-up.
+- Merchant top-up requests are RM100/100 points, RM500/550 points, RM800/880 points, RM1,000/1,100 points and RM1,200/1,440 points.
+- Top-up selections are recorded and open a WhatsApp request to the number configured in `ADMIN_WHATSAPP_NUMBER`, containing the merchant name, email, phone, package and points.
 - Only the platform administrator can top up points or change a merchant's locked name, URL slug, login email and password.
 - Merchant passwords are stored as salted scrypt hashes and can only be reset, never viewed.
 - Administrator and merchant identities can stay signed in simultaneously in the same browser session.
