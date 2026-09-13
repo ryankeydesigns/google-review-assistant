@@ -56,6 +56,10 @@ const id = () => crypto.randomUUID();
 const languageName = (value) => value === "zh" ? "中文" : value === "ms" ? "Bahasa Melayu" : "English";
 const publicBase = () => (process.env.PUBLIC_BASE_URL || "https://google-review.ryankey.com.my").replace(/\/$/, "");
 const adminWhatsapp = () => String(process.env.ADMIN_WHATSAPP_NUMBER || "").replace(/\D/g, "");
+const whatsappNumber = (value) => {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.startsWith("0") ? `60${digits.slice(1)}` : digits;
+};
 
 const navItems = [
   ["overview", "/admin", "总览"],
@@ -117,7 +121,7 @@ function layout(title, content, options = {}) {
   let shell = content;
   if (admin) shell = `<div class="admin-shell"><aside class="sidebar"><a class="brand" href="/admin"><span class="brand-mark">R</span><span><b>REVIEW CONTROL</b><small>RyanKey Designs</small></span></a><nav>${navItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(process.env.ADMIN_EMAIL || "Administrator")}</b><small>Platform Owner</small><form method="post" action="/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
   if (client) shell = `<div class="admin-shell client-shell"><aside class="sidebar"><a class="brand" href="/client"><span class="brand-mark">R</span><span><b>MERCHANT PORTAL</b><small>Google Review Assistant</small></span></a><nav>${clientNavItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(client.name)}</b><small>${escapeHtml(client.client_email || "Client Account")}</small><form method="post" action="/client/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
-  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=7"></head><body>${shell}</body></html>`;
+  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=8"></head><body>${shell}</body></html>`;
 }
 
 function requireAdmin(req, res, next) {
@@ -483,6 +487,15 @@ app.get("/admin/reports.csv", requireAdmin, asyncRoute(async (req, res) => {
   res.send(`\uFEFF${csv}`);
 }));
 
+function topupSuccessButton(transaction) {
+  if (transaction.event_type !== "topup") return "—";
+  const phone = whatsappNumber(transaction.client_phone);
+  if (!phone) return `<span class="status">缺少电话</span>`;
+  const fee = String(transaction.note || "").match(/RM[\d,]+/)?.[0] || "未注明";
+  const message = `您好 ${transaction.name}，您的 Google Review Assistant 点数已经充值成功。\n\n客户电邮：${transaction.client_email || "未填写"}\n充值费用：${fee}\n充值点数：${Number(transaction.points_delta)}分\n充值时间：${formatDateTime(transaction.created_at)}\n目前点数余额：${Number(transaction.current_balance)}分\n\n请返回客户评价资料库刷新页面：\n${publicBase()}/client/reviews\n\n谢谢。`;
+  return `<a class="button small whatsapp" target="_blank" rel="noopener" href="https://wa.me/${phone}?text=${encodeURIComponent(message)}">WhatsApp通知</a>`;
+}
+
 app.get("/admin/billing", requireAdmin, asyncRoute(async (req, res) => {
   const [[merchants], [transactions]] = await Promise.all([
     pool.query(`SELECT m.id,m.name,m.slug,COALESCE(SUM(u.points_delta),0) balance,
@@ -490,17 +503,19 @@ app.get("/admin/billing", requireAdmin, asyncRoute(async (req, res) => {
       COUNT(CASE WHEN u.event_type='review_added' THEN 1 END) reviews_added,
       COALESCE(-SUM(CASE WHEN u.points_delta<0 THEN u.points_delta ELSE 0 END),0) points_used
       FROM merchants m LEFT JOIN usage_ledger u ON u.merchant_id=m.id GROUP BY m.id ORDER BY m.name`),
-    pool.query("SELECT u.event_type,u.points_delta,u.note,u.created_at,m.name FROM usage_ledger u JOIN merchants m ON m.id=u.merchant_id WHERE u.event_type IN ('topup','topup_request','visit','review_added') ORDER BY u.created_at DESC LIMIT 50"),
+    pool.query(`SELECT u.event_type,u.points_delta,u.note,u.created_at,m.name,m.client_email,m.client_phone,
+      (SELECT COALESCE(SUM(balance_entry.points_delta),0) FROM usage_ledger balance_entry WHERE balance_entry.merchant_id=u.merchant_id) current_balance
+      FROM usage_ledger u JOIN merchants m ON m.id=u.merchant_id
+      WHERE u.event_type IN ('topup','topup_request','visit','review_added') ORDER BY u.created_at DESC LIMIT 50`),
   ]);
   const merchantCards = merchants.map((merchant) => `<article class="billing-card"><div class="billing-head"><div><p class="eyebrow">${escapeHtml(merchant.slug)}</p><h2>${escapeHtml(merchant.name)}</h2></div><strong class="balance ${Number(merchant.balance) < 0 ? "low" : ""}">${Number(merchant.balance)}<small>分</small></strong></div><div class="usage-split"><span><b>${Number(merchant.visits)}</b><small>进入次数 × 1分</small></span><span><b>${Number(merchant.reviews_added)}</b><small>新增评价 × 10分</small></span><span><b>${Number(merchant.points_used)}</b><small>累计使用分数</small></span></div><p class="topup-title">人工充值 · RM1 = 1分</p><div class="topup-options">${Object.values(topupPackages).map((item) => `<form method="post" action="/admin/billing/topup" onsubmit="return confirm('确认已收款 RM${item.amount}，并充值 ${item.points} 分？')"><input type="hidden" name="merchantId" value="${merchant.id}"><input type="hidden" name="amount" value="${item.amount}"><button type="submit">RM${item.amount}<small>+${item.points}分</small></button></form>`).join("")}</div><a class="report-link" href="/admin/reports?merchantId=${merchant.id}">查看客户报告 →</a></article>`).join("");
-  const transactionRows = transactions.map((transaction) => `<tr><td>${formatDateTime(transaction.created_at)}</td><td>${escapeHtml(transaction.name)}</td><td>${usageLabel(transaction.event_type)}</td><td>${escapeHtml(transaction.note || "—")}</td><td class="points ${Number(transaction.points_delta) < 0 ? "negative" : "positive"}">${Number(transaction.points_delta) > 0 ? "+" : ""}${Number(transaction.points_delta)} 分</td></tr>`).join("");
-  res.send(layout("点数收费", `<header class="page-head"><div><p class="eyebrow">USAGE & BILLING</p><h1>点数收费</h1><p>RM1 等于 1 分；客户每次进入扣 1 分，新增每条评价一次性扣 10 分。</p></div></header>${req.query.toppedUp ? `<div class="notice success">充值完成，已加入 ${Number(req.query.toppedUp)} 分。</div>` : ""}<section class="billing-grid">${merchantCards || `<div class="empty">还没有商家</div>`}</section><section class="panel"><div class="panel-head"><h2>最近点数记录</h2><p>显示最近 50 条充值与扣分记录</p></div>${transactionRows ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>商家</th><th>项目</th><th>说明</th><th>点数</th></tr></thead><tbody>${transactionRows}</tbody></table></div>` : `<div class="empty">还没有点数记录</div>`}</section>`, { admin: true, active: "billing" }));
+  const transactionRows = transactions.map((transaction) => `<tr><td>${formatDateTime(transaction.created_at)}</td><td>${escapeHtml(transaction.name)}</td><td>${usageLabel(transaction.event_type)}</td><td>${escapeHtml(transaction.note || "—")}</td><td class="points ${Number(transaction.points_delta) < 0 ? "negative" : Number(transaction.points_delta) > 0 ? "positive" : ""}">${Number(transaction.points_delta) > 0 ? "+" : ""}${Number(transaction.points_delta)} 分</td><td>${topupSuccessButton(transaction)}</td></tr>`).join("");
+  res.send(layout("点数收费", `<header class="page-head"><div><p class="eyebrow">USAGE & BILLING</p><h1>点数收费</h1><p>RM1 等于 1 分；客户每次进入扣 1 分，新增每条评价一次性扣 10 分。</p></div></header>${req.query.toppedUp ? `<div class="notice success">充值完成，已加入 ${Number(req.query.toppedUp)} 分。</div>` : ""}<section class="billing-grid">${merchantCards || `<div class="empty">还没有商家</div>`}</section><section class="panel"><div class="panel-head"><h2>最近点数记录</h2><p>显示最近 50 条充值与扣分记录</p></div>${transactionRows ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>商家</th><th>项目</th><th>说明</th><th>点数</th><th>通知商家</th></tr></thead><tbody>${transactionRows}</tbody></table></div>` : `<div class="empty">还没有点数记录</div>`}</section>`, { admin: true, active: "billing" }));
 }));
 
 app.post("/admin/billing/topup", requireAdmin, asyncRoute(async (req, res) => {
   const selectedPackage = topupPackages[String(req.body.amount || "")];
   if (!selectedPackage) return res.status(400).send("Invalid top-up package");
-  if (!adminWhatsapp()) return validationError(res, "平台充值WhatsApp尚未设置，请联系管理员。", "/client/reviews");
   const bonusText = selectedPackage.bonus ? `（含赠送 ${selectedPackage.bonus} 分）` : "";
   await pool.query("INSERT INTO usage_ledger (id,merchant_id,event_type,points_delta,note) VALUES (?,?,?,?,?)", [id(), req.body.merchantId, "topup", selectedPackage.points, `后台确认充值 RM${selectedPackage.amount}${bonusText}`]);
   res.redirect(`/admin/billing?toppedUp=${selectedPackage.points}`);
@@ -580,6 +595,7 @@ app.post("/client/billing/request", requireClient, asyncRoute(async (req, res) =
   if (!merchant) return clearClientLogin(req, res);
   const selectedPackage = topupPackages[String(req.body.amount || "")];
   if (!selectedPackage) return res.status(400).send("Invalid top-up package");
+  if (!adminWhatsapp()) return validationError(res, "平台充值WhatsApp尚未设置，请联系管理员。", "/client/reviews");
   const clientPhone = String(req.body.clientPhone || "").trim().slice(0, 30);
   if (!clientPhone) return validationError(res, "请填写客户电话号码。", "/client/reviews");
   await pool.query("UPDATE merchants SET client_phone=? WHERE id=?", [clientPhone, merchant.id]);

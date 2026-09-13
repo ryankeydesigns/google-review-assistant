@@ -38,6 +38,7 @@ The system does not select a rating or publish a Google review on behalf of a cu
 - A merchant with 10 points or fewer cannot add another review template until the administrator credits a top-up.
 - Merchant top-up requests are RM100/100 points, RM500/550 points, RM800/880 points, RM1,000/1,100 points and RM1,200/1,440 points.
 - Top-up selections are recorded and open a WhatsApp request to the number configured in `ADMIN_WHATSAPP_NUMBER`, containing the merchant name, email, phone, package and points.
+- Every completed administrator top-up record provides a WhatsApp success button with the fee, points, time, current balance and merchant review-library refresh link.
 - Only the platform administrator can top up points or change a merchant's locked name, URL slug, login email and password.
 - Merchant passwords are stored as salted scrypt hashes and can only be reset, never viewed.
 - Administrator and merchant identities can stay signed in simultaneously in the same browser session.
