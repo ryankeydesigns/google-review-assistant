@@ -411,6 +411,95 @@ textarea:focus {
 .merchant-layout .panel {
   max-width: none;
 }
+.login-share-card {
+  padding: 22px;
+}
+.login-share-card h2 {
+  margin: 7px 0 16px;
+}
+.login-share-card > p:not(.eyebrow) {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+.copy-row input,
+.share-password-form input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--ink);
+}
+.login-email {
+  display: grid;
+  gap: 4px;
+  margin: 16px 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+.login-email span,
+.security-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+.share-password-form {
+  display: grid;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.share-password-form label {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.credentials-ready {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #86efac;
+  border-radius: 14px;
+  background: #ecfdf3;
+}
+.credentials-ready p {
+  margin: 0 0 10px;
+  color: #067647;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.credentials-ready textarea {
+  height: 150px;
+  padding: 10px;
+  background: #fff;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: none;
+}
+.share-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.button.whatsapp {
+  border-color: #16a34a;
+  background: #16a34a;
+  color: #fff;
+}
+.security-note {
+  display: block;
+  margin-top: 10px;
+  line-height: 1.5;
+}
 .template-add {
   display: grid;
   gap: 12px;

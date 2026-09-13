@@ -21,6 +21,7 @@ The application creates its tables automatically on first successful startup. Me
 - `/admin/reports` — monthly merchant usage reports and CSV export
 - `/admin/billing` — point balance, usage charges and manual top-ups
 - `/client/login` — separate merchant customer login
+- `/client/login/:slug` — merchant-specific customer login URL
 - `/client` — merchant dashboard for profile, review library and reports
 - `/client/reports.csv?month=YYYY-MM` — signed-in merchant monthly CSV report
 - `/r/:slug` — public merchant review assistant
@@ -37,4 +38,6 @@ The system does not select a rating or publish a Google review on behalf of a cu
 - Manual top-up packages are RM100, RM500, RM800 and RM1,200.
 - Only the platform administrator can top up points or change a merchant's locked name, URL slug, login email and password.
 - Merchant passwords are stored as salted scrypt hashes and can only be reset, never viewed.
+- Administrator and merchant identities can stay signed in simultaneously in the same browser session.
+- The administrator can reset a merchant password and receive a one-time copy/WhatsApp sharing panel containing the login URL, email and new password.
 - Generated review text is stored for monthly reporting; visitor identities are counted with a one-way anonymous hash rather than a raw IP address.
