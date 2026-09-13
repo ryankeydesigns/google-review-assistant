@@ -66,6 +66,7 @@ const navItems = [
   ["merchants", "/admin/merchants", "所有商家"],
   ["reviews", "/admin/reviews", "评价资料"],
   ["reports", "/admin/reports", "客户报告"],
+  ["analytics", "/admin/analytics", "使用量分析"],
   ["billing", "/admin/billing", "点数收费"],
   ["qr", "/admin/qr-codes", "QR Codes"],
   ["settings", "/admin/settings", "设置"],
@@ -92,6 +93,11 @@ const csvCell = (value) => {
   return `"${safeText.replaceAll('"', '""')}"`;
 };
 const usageLabel = (value) => ({ visit: "客户进入", review_generated: "生成评价", review_added: "新增评价", topup: "充值", topup_request: "充值申请" }[value] || value);
+const analyticsPeriods = {
+  day: { title: "每日", count: 30, sqlFormat: "%Y-%m-%d" },
+  month: { title: "每月", count: 12, sqlFormat: "%Y-%m" },
+  year: { title: "每年", count: 5, sqlFormat: "%Y" },
+};
 const topupPackages = {
   "100": { amount: 100, bonus: 0, points: 100 },
   "500": { amount: 500, bonus: 50, points: 550 },
@@ -113,6 +119,69 @@ const verifyPassword = (password, storedHash) => {
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 };
 
+function analyticsBuckets(period) {
+  const selected = analyticsPeriods[period] || analyticsPeriods.month;
+  const nowParts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "numeric", day: "numeric" }).formatToParts(new Date()).filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+  const keys = [];
+  for (let offset = selected.count - 1; offset >= 0; offset -= 1) {
+    if (period === "day") {
+      const date = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day - offset));
+      keys.push(`${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`);
+    } else if (period === "year") {
+      keys.push(String(nowParts.year - offset));
+    } else {
+      const date = new Date(Date.UTC(nowParts.year, nowParts.month - 1 - offset, 1));
+      keys.push(`${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`);
+    }
+  }
+  const firstKey = keys[0];
+  const start = new Date(`${period === "year" ? `${firstKey}-01-01` : period === "day" ? firstKey : `${firstKey}-01`}T00:00:00+08:00`);
+  const labels = keys.map((key) => period === "day" ? `${key.slice(5, 7)}/${key.slice(8, 10)}` : period === "month" ? key : `${key}年`);
+  return { ...selected, keys, labels, start };
+}
+
+function chartPath(points) {
+  if (!points.length) return "";
+  let path = `M ${points[0][0]} ${points[0][1]}`;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const middle = (previous[0] + current[0]) / 2;
+    path += ` C ${middle} ${previous[1]}, ${middle} ${current[1]}, ${current[0]} ${current[1]}`;
+  }
+  return path;
+}
+
+function lineChart(labels, series, options = {}) {
+  const width = 960;
+  const height = 320;
+  const left = 58;
+  const right = 24;
+  const top = 30;
+  const bottom = 54;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const allValues = series.flatMap((item) => item.values.map((value) => Number(value) || 0));
+  const maxValue = Math.max(options.minimumMax || 1, ...allValues);
+  const x = (index) => left + (labels.length <= 1 ? plotWidth / 2 : index * plotWidth / (labels.length - 1));
+  const y = (value) => top + plotHeight - ((Number(value) || 0) / maxValue) * plotHeight;
+  const grid = Array.from({ length: 5 }, (_, index) => {
+    const value = maxValue * (4 - index) / 4;
+    const yPos = top + index * plotHeight / 4;
+    const label = options.percent ? `${Math.round(value)}%` : Math.round(value).toLocaleString("en-MY");
+    return `<line x1="${left}" y1="${yPos}" x2="${width - right}" y2="${yPos}"/><text x="${left - 10}" y="${yPos + 4}" text-anchor="end">${label}</text>`;
+  }).join("");
+  const labelStep = Math.max(1, Math.ceil(labels.length / 7));
+  const xLabels = labels.map((label, index) => (index % labelStep === 0 || index === labels.length - 1) ? `<text x="${x(index)}" y="${height - 18}" text-anchor="middle">${escapeHtml(label)}</text>` : "").join("");
+  const lines = series.map((item) => {
+    const points = item.values.map((value, index) => [x(index), y(value)]);
+    const dots = points.map((point, index) => `<circle cx="${point[0]}" cy="${point[1]}" r="3.5"><title>${escapeHtml(labels[index])} · ${escapeHtml(item.name)}：${Number(item.values[index]).toLocaleString("en-MY")}${options.percent ? "%" : ""}</title></circle>`).join("");
+    return `<g class="chart-series" style="--series:${item.color}"><path d="${chartPath(points)}"/>${dots}</g>`;
+  }).join("");
+  const legend = series.map((item) => `<span><i style="background:${item.color}"></i>${escapeHtml(item.name)}</span>`).join("");
+  return `<div class="chart-legend">${legend}</div><div class="chart-scroll"><svg class="line-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(options.label || "数据趋势图")}"><g class="chart-grid">${grid}${xLabels}</g>${lines}</svg></div>`;
+}
+
 function layout(title, content, options = {}) {
   const admin = options.admin;
   const client = options.client;
@@ -121,7 +190,7 @@ function layout(title, content, options = {}) {
   let shell = content;
   if (admin) shell = `<div class="admin-shell"><aside class="sidebar"><a class="brand" href="/admin"><span class="brand-mark">R</span><span><b>REVIEW CONTROL</b><small>RyanKey Designs</small></span></a><nav>${navItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(process.env.ADMIN_EMAIL || "Administrator")}</b><small>Platform Owner</small><form method="post" action="/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
   if (client) shell = `<div class="admin-shell client-shell"><aside class="sidebar"><a class="brand" href="/client"><span class="brand-mark">R</span><span><b>MERCHANT PORTAL</b><small>Google Review Assistant</small></span></a><nav>${clientNavItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(client.name)}</b><small>${escapeHtml(client.client_email || "Client Account")}</small><form method="post" action="/client/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
-  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=8"></head><body>${shell}</body></html>`;
+  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=9"></head><body>${shell}</body></html>`;
 }
 
 function requireAdmin(req, res, next) {
@@ -344,6 +413,78 @@ app.get("/admin", requireAdmin, asyncRoute(async (_req, res) => {
   const cards = [["所有商家", merchantCount[0]?.total || 0, `${merchantCount[0]?.active || 0} 个已启用`], ["QR 扫描", events.scan || 0, "评价页开启次数"], ["评价生成", events.generate || 0, "按钮点击次数"], ["Google 跳转", events.redirect || 0, "前往评论页面"]];
   const rows = recent.map((m) => `<tr><td><b>${escapeHtml(m.name)}</b><small>/r/${escapeHtml(m.slug)}</small></td><td>${escapeHtml(m.industry)}</td><td><span class="status ${m.active ? "on" : ""}">${m.active ? "已启用" : "已暂停"}</span></td><td class="actions"><a class="button small ghost" target="_blank" href="/r/${encodeURIComponent(m.slug)}">预览</a><a class="button small" href="/admin/merchants/${m.id}/edit">管理</a></td></tr>`).join("");
   res.send(layout("管理中心", `<header class="page-head"><div><p class="eyebrow">RYANKEY ADMIN / HOSTINGER</p><h1>Google Review 管理中心</h1><p>所有商家资料和互动数据都集中在这里。</p></div><a class="button primary" href="/admin/merchants/new">＋ 新增商家</a></header><section class="stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="panel"><div class="panel-head"><div><h2>最近商家</h2><p>管理商家资料、评价模板与 QR Code</p></div></div>${rows ? `<div class="table-wrap"><table><thead><tr><th>商家</th><th>行业</th><th>状态</th><th class="right">操作</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty"><h2>还没有商家</h2><p>建立第一个商家后，系统会准备评价模板及 QR Code。</p></div>`}</section>`, { admin: true, active: "overview" }));
+}));
+
+app.get("/admin/analytics", requireAdmin, asyncRoute(async (req, res) => {
+  const period = Object.hasOwn(analyticsPeriods, req.query.period) ? req.query.period : "month";
+  const buckets = analyticsBuckets(period);
+  const [[activityRows], [joinRows], [baselineRows], [merchantRows]] = await Promise.all([
+    pool.query(`SELECT DATE_FORMAT(created_at, ?) bucket,
+      COUNT(CASE WHEN event_type='visit' THEN 1 END) visits,
+      COUNT(CASE WHEN event_type='review_generated' THEN 1 END) generated,
+      COUNT(CASE WHEN event_type='review_added' THEN 1 END) reviews_added,
+      COUNT(DISTINCT CASE WHEN event_type='review_added' THEN merchant_id END) merchants_adding
+      FROM usage_ledger WHERE created_at>=? GROUP BY bucket ORDER BY bucket`, [buckets.sqlFormat, buckets.start]),
+    pool.query("SELECT DATE_FORMAT(created_at, ?) bucket,COUNT(*) total FROM merchants WHERE created_at>=? GROUP BY bucket ORDER BY bucket", [buckets.sqlFormat, buckets.start]),
+    pool.query("SELECT COUNT(*) total FROM merchants WHERE created_at<?", [buckets.start]),
+    pool.query(`SELECT m.id,m.name,
+      COUNT(CASE WHEN u.event_type='visit' THEN 1 END) visits,
+      COUNT(CASE WHEN u.event_type='review_generated' THEN 1 END) generated,
+      COUNT(CASE WHEN u.event_type='review_added' THEN 1 END) reviews_added
+      FROM merchants m LEFT JOIN usage_ledger u ON u.merchant_id=m.id AND u.created_at>=?
+      GROUP BY m.id,m.name ORDER BY visits DESC,generated DESC,reviews_added DESC LIMIT 10`, [buckets.start]),
+  ]);
+  const activityByBucket = new Map(activityRows.map((row) => [String(row.bucket), row]));
+  const joinsByBucket = new Map(joinRows.map((row) => [String(row.bucket), Number(row.total) || 0]));
+  const visits = buckets.keys.map((key) => Number(activityByBucket.get(key)?.visits) || 0);
+  const generated = buckets.keys.map((key) => Number(activityByBucket.get(key)?.generated) || 0);
+  const reviewsAdded = buckets.keys.map((key) => Number(activityByBucket.get(key)?.reviews_added) || 0);
+  const merchantTotals = [];
+  let runningMerchants = Number(baselineRows[0]?.total) || 0;
+  for (const key of buckets.keys) {
+    runningMerchants += joinsByBucket.get(key) || 0;
+    merchantTotals.push(runningMerchants);
+  }
+  const generatedRate = buckets.keys.map((key, index) => visits[index] ? Math.round(generated[index] / visits[index] * 1000) / 10 : 0);
+  const additionRate = buckets.keys.map((key, index) => {
+    const adding = Number(activityByBucket.get(key)?.merchants_adding) || 0;
+    return merchantTotals[index] ? Math.round(adding / merchantTotals[index] * 1000) / 10 : 0;
+  });
+  const totalVisits = visits.reduce((sum, value) => sum + value, 0);
+  const totalGenerated = generated.reduce((sum, value) => sum + value, 0);
+  const totalAdded = reviewsAdded.reduce((sum, value) => sum + value, 0);
+  const joined = joinRows.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
+  const cards = [
+    ["商家使用量", totalVisits, `${buckets.title}范围内客户进入次数`],
+    ["生成评价", totalGenerated, `${totalVisits ? Math.round(totalGenerated / totalVisits * 1000) / 10 : 0}% 评价生成率`],
+    ["商家加入增长", joined, `目前共 ${merchantTotals.at(-1) || 0} 个商家`],
+    ["新增评价", totalAdded, "商家加入资料库的评价"],
+  ];
+  const activityChart = lineChart(buckets.labels, [
+    { name: "客户进入", color: "#2563eb", values: visits },
+    { name: "生成评价", color: "#7c3aed", values: generated },
+  ], { label: `${buckets.title}使用成绩增长` });
+  const growthChart = lineChart(buckets.labels, [
+    { name: "商家总数", color: "#0891b2", values: merchantTotals },
+  ], { label: `${buckets.title}商家加入增长` });
+  const rateChart = lineChart(buckets.labels, [
+    { name: "评价生成率", color: "#16a34a", values: generatedRate },
+    { name: "商家新增评价率", color: "#f59e0b", values: additionRate },
+  ], { label: `${buckets.title}商家使用及新增评价率`, percent: true, minimumMax: 100 });
+  const merchantUsage = merchantRows.map((merchant) => ({
+    ...merchant,
+    visits: Number(merchant.visits) || 0,
+    generated: Number(merchant.generated) || 0,
+    reviewsAdded: Number(merchant.reviews_added) || 0,
+  }));
+  const maxMerchantUsage = Math.max(1, ...merchantUsage.map((merchant) => merchant.visits + merchant.generated));
+  const usageBars = merchantUsage.map((merchant) => {
+    const usage = merchant.visits + merchant.generated;
+    const width = Math.max(usage ? 3 : 0, Math.round(usage / maxMerchantUsage * 100));
+    return `<article class="usage-bar-row"><div><b>${escapeHtml(merchant.name)}</b><span>进入 ${merchant.visits} · 生成 ${merchant.generated} · 新增 ${merchant.reviewsAdded}</span></div><div class="usage-track"><i style="width:${width}%"></i></div><strong>${usage}</strong></article>`;
+  }).join("");
+  const periodTabs = Object.entries(analyticsPeriods).map(([key, item]) => `<a class="period-tab ${period === key ? "active" : ""}" href="/admin/analytics?period=${key}">${item.title}</a>`).join("");
+  res.send(layout("使用量分析", `<header class="page-head analytics-head"><div><p class="eyebrow">USAGE ANALYTICS</p><h1>使用量分析</h1><p>追踪平台成绩、商家使用量、商家增长及评价资料库使用率。</p></div><nav class="period-tabs" aria-label="统计周期">${periodTabs}</nav></header><section class="stats analytics-stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${Number(value).toLocaleString("en-MY")}</strong><small>${note}</small></article>`).join("")}</section><section class="analytics-grid"><article class="panel chart-panel"><div class="panel-head"><h2>${buckets.title}成绩增长</h2><p>客户进入与生成评价的变化曲线</p></div>${activityChart}</article><article class="panel chart-panel"><div class="panel-head"><h2>商家加入增长</h2><p>商家总数累计成长曲线</p></div>${growthChart}</article><article class="panel chart-panel wide"><div class="panel-head"><h2>商家使用／添加评价率</h2><p>评价生成率＝生成次数 ÷ 客户进入；新增评价率＝有新增评价的商家 ÷ 商家总数</p></div>${rateChart}</article><article class="panel merchant-usage-panel wide"><div class="panel-head"><h2>商家使用量排行</h2><p>${buckets.title}范围内，以客户进入及生成评价次数计算</p></div><div class="usage-bars">${usageBars || `<div class="empty">目前还没有商家数据</div>`}</div></article></section>`, { admin: true, active: "analytics" }));
 }));
 
 app.get("/admin/merchants", requireAdmin, asyncRoute(async (_req, res) => {

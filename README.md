@@ -19,6 +19,7 @@ The application creates its tables automatically on first successful startup. Me
 - `/login` — administrator login
 - `/admin` — dashboard
 - `/admin/reports` — monthly merchant usage reports and CSV export
+- `/admin/analytics` — daily, monthly and yearly usage, merchant growth and review-rate charts
 - `/admin/billing` — point balance, usage charges and manual top-ups
 - `/client/login` — separate merchant customer login
 - `/client/login/:slug` — merchant-specific customer login URL
