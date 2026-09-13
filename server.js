@@ -423,7 +423,8 @@ app.get("/admin/analytics", requireAdmin, asyncRoute(async (req, res) => {
       COUNT(CASE WHEN event_type='visit' THEN 1 END) visits,
       COUNT(CASE WHEN event_type='review_generated' THEN 1 END) generated,
       COUNT(CASE WHEN event_type='review_added' THEN 1 END) reviews_added,
-      COUNT(DISTINCT CASE WHEN event_type='review_added' THEN merchant_id END) merchants_adding
+      COUNT(DISTINCT CASE WHEN event_type='review_added' THEN merchant_id END) merchants_adding,
+      COUNT(DISTINCT CASE WHEN event_type='topup' THEN merchant_id END) merchants_topping_up
       FROM usage_ledger WHERE created_at>=? GROUP BY bucket ORDER BY bucket`, [buckets.sqlFormat, buckets.start]),
     pool.query("SELECT DATE_FORMAT(created_at, ?) bucket,COUNT(*) total FROM merchants WHERE created_at>=? GROUP BY bucket ORDER BY bucket", [buckets.sqlFormat, buckets.start]),
     pool.query("SELECT COUNT(*) total FROM merchants WHERE created_at<?", [buckets.start]),
@@ -450,6 +451,10 @@ app.get("/admin/analytics", requireAdmin, asyncRoute(async (req, res) => {
     const adding = Number(activityByBucket.get(key)?.merchants_adding) || 0;
     return merchantTotals[index] ? Math.round(adding / merchantTotals[index] * 1000) / 10 : 0;
   });
+  const topupRate = buckets.keys.map((key, index) => {
+    const toppingUp = Number(activityByBucket.get(key)?.merchants_topping_up) || 0;
+    return merchantTotals[index] ? Math.round(toppingUp / merchantTotals[index] * 1000) / 10 : 0;
+  });
   const totalVisits = visits.reduce((sum, value) => sum + value, 0);
   const totalGenerated = generated.reduce((sum, value) => sum + value, 0);
   const totalAdded = reviewsAdded.reduce((sum, value) => sum + value, 0);
@@ -470,7 +475,8 @@ app.get("/admin/analytics", requireAdmin, asyncRoute(async (req, res) => {
   const rateChart = lineChart(buckets.labels, [
     { name: "评价生成率", color: "#16a34a", values: generatedRate },
     { name: "商家新增评价率", color: "#f59e0b", values: additionRate },
-  ], { label: `${buckets.title}商家使用及新增评价率`, percent: true, minimumMax: 100 });
+    { name: "客户充值率", color: "#e11d48", values: topupRate },
+  ], { label: `${buckets.title}商家使用、新增评价及客户充值率`, percent: true, minimumMax: 100 });
   const merchantUsage = merchantRows.map((merchant) => ({
     ...merchant,
     visits: Number(merchant.visits) || 0,
@@ -484,7 +490,7 @@ app.get("/admin/analytics", requireAdmin, asyncRoute(async (req, res) => {
     return `<article class="usage-bar-row"><div><b>${escapeHtml(merchant.name)}</b><span>进入 ${merchant.visits} · 生成 ${merchant.generated} · 新增 ${merchant.reviewsAdded}</span></div><div class="usage-track"><i style="width:${width}%"></i></div><strong>${usage}</strong></article>`;
   }).join("");
   const periodTabs = Object.entries(analyticsPeriods).map(([key, item]) => `<a class="period-tab ${period === key ? "active" : ""}" href="/admin/analytics?period=${key}">${item.title}</a>`).join("");
-  res.send(layout("使用量分析", `<header class="page-head analytics-head"><div><p class="eyebrow">USAGE ANALYTICS</p><h1>使用量分析</h1><p>追踪平台成绩、商家使用量、商家增长及评价资料库使用率。</p></div><nav class="period-tabs" aria-label="统计周期">${periodTabs}</nav></header><section class="stats analytics-stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${Number(value).toLocaleString("en-MY")}</strong><small>${note}</small></article>`).join("")}</section><section class="analytics-grid"><article class="panel chart-panel"><div class="panel-head"><h2>${buckets.title}成绩增长</h2><p>客户进入与生成评价的变化曲线</p></div>${activityChart}</article><article class="panel chart-panel"><div class="panel-head"><h2>商家加入增长</h2><p>商家总数累计成长曲线</p></div>${growthChart}</article><article class="panel chart-panel wide"><div class="panel-head"><h2>商家使用／添加评价率</h2><p>评价生成率＝生成次数 ÷ 客户进入；新增评价率＝有新增评价的商家 ÷ 商家总数</p></div>${rateChart}</article><article class="panel merchant-usage-panel wide"><div class="panel-head"><h2>商家使用量排行</h2><p>${buckets.title}范围内，以客户进入及生成评价次数计算</p></div><div class="usage-bars">${usageBars || `<div class="empty">目前还没有商家数据</div>`}</div></article></section>`, { admin: true, active: "analytics" }));
+  res.send(layout("使用量分析", `<header class="page-head analytics-head"><div><p class="eyebrow">USAGE ANALYTICS</p><h1>使用量分析</h1><p>追踪平台成绩、商家使用量、商家增长、评价资料库使用率及客户充值率。</p></div><nav class="period-tabs" aria-label="统计周期">${periodTabs}</nav></header><section class="stats analytics-stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${Number(value).toLocaleString("en-MY")}</strong><small>${note}</small></article>`).join("")}</section><section class="analytics-grid"><article class="panel chart-panel"><div class="panel-head"><h2>${buckets.title}成绩增长</h2><p>客户进入与生成评价的变化曲线</p></div>${activityChart}</article><article class="panel chart-panel"><div class="panel-head"><h2>商家加入增长</h2><p>商家总数累计成长曲线</p></div>${growthChart}</article><article class="panel chart-panel wide"><div class="panel-head"><h2>商家使用／添加评价／客户充值率</h2><p>评价生成率＝生成次数 ÷ 客户进入；新增评价率＝有新增评价的商家 ÷ 商家总数；充值率＝完成充值的商家 ÷ 商家总数</p></div>${rateChart}</article><article class="panel merchant-usage-panel wide"><div class="panel-head"><h2>商家使用量排行</h2><p>${buckets.title}范围内，以客户进入及生成评价次数计算</p></div><div class="usage-bars">${usageBars || `<div class="empty">目前还没有商家数据</div>`}</div></article></section>`, { admin: true, active: "analytics" }));
 }));
 
 app.get("/admin/merchants", requireAdmin, asyncRoute(async (_req, res) => {
