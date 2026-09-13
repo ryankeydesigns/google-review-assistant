@@ -65,6 +65,12 @@ const navItems = [
   ["qr", "/admin/qr-codes", "QR Codes"],
   ["settings", "/admin/settings", "设置"],
 ];
+const clientNavItems = [
+  ["dashboard", "/client", "主页"],
+  ["merchant", "/client/merchant", "商家资料"],
+  ["reviews", "/client/reviews", "评价资料库"],
+  ["reports", "/client/reports", "客户报告"],
+];
 
 const currentMonth = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit" }).format(new Date());
 const validMonth = (value) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(value || "")) ? String(value) : currentMonth();
@@ -82,13 +88,28 @@ const csvCell = (value) => {
 };
 const usageLabel = (value) => ({ visit: "客户进入", review_generated: "生成评价", review_added: "新增评价", topup: "充值" }[value] || value);
 const visitorHash = (req) => crypto.createHash("sha256").update(`${req.ip}|${req.get("user-agent") || ""}|${process.env.SESSION_SECRET}`).digest("hex");
+const hashPassword = (password) => {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return `scrypt$${salt}$${hash}`;
+};
+const verifyPassword = (password, storedHash) => {
+  const [algorithm, salt, expectedHex] = String(storedHash || "").split("$");
+  if (algorithm !== "scrypt" || !salt || !expectedHex) return false;
+  const actual = crypto.scryptSync(String(password), salt, 64);
+  const expected = Buffer.from(expectedHex, "hex");
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+};
 
 function layout(title, content, options = {}) {
   const admin = options.admin;
+  const client = options.client;
   const active = options.active || "overview";
   const documentLanguage = options.lang || "zh-Hans";
-  const shell = admin ? `<div class="admin-shell"><aside class="sidebar"><a class="brand" href="/admin"><span class="brand-mark">R</span><span><b>REVIEW CONTROL</b><small>RyanKey Designs</small></span></a><nav>${navItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(process.env.ADMIN_EMAIL || "Administrator")}</b><small>Platform Owner</small><form method="post" action="/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>` : content;
-  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=4"></head><body>${shell}</body></html>`;
+  let shell = content;
+  if (admin) shell = `<div class="admin-shell"><aside class="sidebar"><a class="brand" href="/admin"><span class="brand-mark">R</span><span><b>REVIEW CONTROL</b><small>RyanKey Designs</small></span></a><nav>${navItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(process.env.ADMIN_EMAIL || "Administrator")}</b><small>Platform Owner</small><form method="post" action="/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
+  if (client) shell = `<div class="admin-shell client-shell"><aside class="sidebar"><a class="brand" href="/client"><span class="brand-mark">R</span><span><b>MERCHANT PORTAL</b><small>Google Review Assistant</small></span></a><nav>${clientNavItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(client.name)}</b><small>${escapeHtml(client.client_email || "Client Account")}</small><form method="post" action="/client/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
+  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=5"></head><body>${shell}</body></html>`;
 }
 
 function requireAdmin(req, res, next) {
@@ -96,8 +117,21 @@ function requireAdmin(req, res, next) {
   res.redirect(`/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
 }
 
+function requireClient(req, res, next) {
+  if (req.session.clientMerchantId) return next();
+  res.redirect(`/client/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
+}
+
+async function getClientMerchant(req) {
+  const [rows] = await pool.query("SELECT * FROM merchants WHERE id=? LIMIT 1", [req.session.clientMerchantId]);
+  return rows[0] || null;
+}
+
 function safeReturnTo(value) {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "/admin";
+}
+function safeClientReturnTo(value) {
+  return typeof value === "string" && (value === "/client" || value.startsWith("/client/")) ? value : "/client";
 }
 
 async function initDatabase() {
@@ -106,6 +140,7 @@ async function initDatabase() {
     id CHAR(36) PRIMARY KEY, name VARCHAR(160) NOT NULL, slug VARCHAR(100) NOT NULL UNIQUE,
     industry VARCHAR(120) NOT NULL, language VARCHAR(5) NOT NULL DEFAULT 'zh',
     google_review_link TEXT NOT NULL, primary_color CHAR(7) NOT NULL DEFAULT '#2563EB',
+    client_email VARCHAR(190) NULL, client_password_hash VARCHAR(255) NULL,
     logo_mime VARCHAR(60) NULL, logo_data LONGBLOB NULL, active TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -133,6 +168,12 @@ async function initDatabase() {
     INDEX idx_usage_type_date (event_type, created_at),
     CONSTRAINT fk_usage_merchant FOREIGN KEY (merchant_id) REFERENCES merchants(id) ON DELETE CASCADE
   ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+  const [merchantColumns] = await pool.query("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='merchants' AND COLUMN_NAME IN ('client_email','client_password_hash')", [process.env.DB_NAME]);
+  const existingColumns = new Set(merchantColumns.map((column) => column.COLUMN_NAME));
+  if (!existingColumns.has("client_email")) await pool.query("ALTER TABLE merchants ADD COLUMN client_email VARCHAR(190) NULL AFTER primary_color");
+  if (!existingColumns.has("client_password_hash")) await pool.query("ALTER TABLE merchants ADD COLUMN client_password_hash VARCHAR(255) NULL AFTER client_email");
+  const [accountIndexes] = await pool.query("SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME='merchants' AND INDEX_NAME='uq_merchants_client_email'", [process.env.DB_NAME]);
+  if (!accountIndexes.length) await pool.query("ALTER TABLE merchants ADD UNIQUE INDEX uq_merchants_client_email (client_email)");
 }
 
 const defaultTemplates = {
@@ -153,6 +194,46 @@ async function ensureAllTemplateLanguages() {
       }
     }
   }
+}
+
+async function normalizeReviewAdditionCharges() {
+  const [rows] = await pool.query("SELECT id,merchant_id FROM usage_ledger WHERE event_type='review_added' ORDER BY merchant_id,created_at,id");
+  const counters = new Map();
+  for (const row of rows) {
+    const additionNumber = (counters.get(row.merchant_id) || 0) + 1;
+    counters.set(row.merchant_id, additionNumber);
+    const points = additionNumber <= 3 ? 0 : -10;
+    const note = additionNumber <= 3 ? `第 ${additionNumber} 条自定义评价（免费）` : `第 ${additionNumber} 条自定义评价（扣10分）`;
+    await pool.query("UPDATE usage_ledger SET points_delta=?,note=? WHERE id=?", [points, note, row.id]);
+  }
+}
+
+async function addCustomReviewTemplate(merchantId, language, content) {
+  const selectedLanguage = ["en", "zh", "ms"].includes(language) ? language : "en";
+  const reviewContent = String(content || "").trim().slice(0, 500);
+  if (!reviewContent) throw new Error("Review content is required");
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.query("SELECT id FROM merchants WHERE id=? FOR UPDATE", [merchantId]);
+    const [countRows] = await connection.query("SELECT COUNT(*) total FROM usage_ledger WHERE merchant_id=? AND event_type='review_added'", [merchantId]);
+    const additionNumber = Number(countRows[0]?.total || 0) + 1;
+    const points = additionNumber <= 3 ? 0 : -10;
+    const note = additionNumber <= 3 ? `第 ${additionNumber} 条自定义评价（免费）` : `第 ${additionNumber} 条自定义评价（扣10分）`;
+    await connection.query("INSERT INTO review_templates (id,merchant_id,language,content) VALUES (?,?,?,?)", [id(), merchantId, selectedLanguage, reviewContent]);
+    await connection.query("INSERT INTO usage_ledger (id,merchant_id,event_type,language,review_text,points_delta,note) VALUES (?,?,?,?,?,?,?)", [id(), merchantId, "review_added", selectedLanguage, reviewContent, points, note]);
+    await connection.commit();
+    return { additionNumber, points };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+function validationError(res, message, back = "/admin/merchants") {
+  return res.status(400).send(layout("资料未保存", `<main class="login-page"><section class="login-card"><h1>资料未保存</h1><p>${escapeHtml(message)}</p><a class="button primary" href="${escapeHtml(back)}">返回修改</a></section></main>`));
 }
 
 app.get("/health", asyncRoute(async (_req, res) => { await pool.query("SELECT 1"); res.json({ ok: true }); }));
@@ -181,6 +262,26 @@ app.post("/login", (req, res) => {
 
 app.post("/logout", (req, res) => req.session.destroy(() => res.redirect("/login")));
 
+app.get("/client/login", (req, res) => {
+  if (req.session.clientMerchantId) return res.redirect("/client");
+  const error = req.query.error ? `<div class="notice error">客户电邮或密码不正确。</div>` : "";
+  res.send(layout("客户登录", `<main class="login-page"><section class="login-card"><span class="brand-mark large">R</span><p class="eyebrow">MERCHANT PORTAL</p><h1>客户登录</h1><p>管理您的商家资料、评价资料库及客户报告。</p>${error}<form method="post" action="/client/login" class="form-stack"><input type="hidden" name="returnTo" value="${escapeHtml(safeClientReturnTo(req.query.returnTo))}"><label>客户电邮<input name="email" type="email" autocomplete="username" required></label><label>密码<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">登录客户主页</button></form><small>Powered by RyanKey Designs</small></section></main>`));
+});
+
+app.post("/client/login", asyncRoute(async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const [rows] = await pool.query("SELECT id,client_password_hash FROM merchants WHERE LOWER(client_email)=? LIMIT 1", [email]);
+  const merchant = rows[0];
+  if (!merchant || !verifyPassword(req.body.password, merchant.client_password_hash)) return res.redirect(`/client/login?error=1&returnTo=${encodeURIComponent(safeClientReturnTo(req.body.returnTo))}`);
+  req.session.regenerate((error) => {
+    if (error) return res.status(500).send("Unable to start session");
+    req.session.clientMerchantId = merchant.id;
+    res.redirect(safeClientReturnTo(req.body.returnTo));
+  });
+}));
+
+app.post("/client/logout", (req, res) => req.session.destroy(() => res.redirect("/client/login")));
+
 app.get("/admin", requireAdmin, asyncRoute(async (_req, res) => {
   const [[merchantCount], [eventRows], [recent]] = await Promise.all([
     pool.query("SELECT COUNT(*) total, SUM(active = 1) active FROM merchants"),
@@ -195,12 +296,13 @@ app.get("/admin", requireAdmin, asyncRoute(async (_req, res) => {
 
 app.get("/admin/merchants", requireAdmin, asyncRoute(async (_req, res) => {
   const [rows] = await pool.query("SELECT * FROM merchants ORDER BY created_at DESC");
-  const table = rows.map((m) => `<tr><td><b>${escapeHtml(m.name)}</b><small>/r/${escapeHtml(m.slug)}</small></td><td>${escapeHtml(m.industry)}</td><td>${languageName(m.language)}</td><td><span class="status ${m.active ? "on" : ""}">${m.active ? "已启用" : "已暂停"}</span></td><td class="actions"><a class="button small" href="/admin/merchants/${m.id}/edit">管理</a><form method="post" action="/admin/merchants/${m.id}/delete" onsubmit="return confirm('确定永久删除这个商家及其资料？')"><button class="button small danger" type="submit">删除</button></form></td></tr>`).join("");
-  res.send(layout("所有商家", `<header class="page-head"><div><p class="eyebrow">MERCHANT DIRECTORY</p><h1>所有商家</h1><p>集中管理商家资料及启用状态。</p></div><a class="button primary" href="/admin/merchants/new">＋ 新增商家</a></header><section class="panel">${table ? `<div class="table-wrap"><table><thead><tr><th>商家</th><th>行业</th><th>语言</th><th>状态</th><th class="right">操作</th></tr></thead><tbody>${table}</tbody></table></div>` : `<div class="empty">还没有商家</div>`}</section>`, { admin: true, active: "merchants" }));
+  const table = rows.map((m) => `<tr><td><b>${escapeHtml(m.name)}</b><small>/r/${escapeHtml(m.slug)}</small></td><td>${escapeHtml(m.industry)}</td><td>${m.client_email ? escapeHtml(m.client_email) : `<span class="status">未设置</span>`}</td><td><span class="status ${m.active ? "on" : ""}">${m.active ? "已启用" : "已暂停"}</span></td><td class="actions"><a class="button small ghost" target="_blank" href="/r/${encodeURIComponent(m.slug)}">预览</a><a class="button small" href="/admin/merchants/${m.id}/edit">管理客户</a><form method="post" action="/admin/merchants/${m.id}/delete" onsubmit="return confirm('确定永久删除这个商家及其资料？')"><button class="button small danger" type="submit">删除</button></form></td></tr>`).join("");
+  res.send(layout("所有商家", `<header class="page-head"><div><p class="eyebrow">MERCHANT DIRECTORY</p><h1>所有商家</h1><p>集中管理商家资料、客户登录账号及启用状态。</p></div><a class="button primary" href="/admin/merchants/new">＋ 新增商家</a></header><section class="panel">${table ? `<div class="table-wrap"><table><thead><tr><th>商家</th><th>行业</th><th>客户登录电邮</th><th>状态</th><th class="right">操作</th></tr></thead><tbody>${table}</tbody></table></div>` : `<div class="empty">还没有商家</div>`}</section>`, { admin: true, active: "merchants" }));
 }));
 
 function merchantForm(merchant = {}) {
-  return `<div class="form-grid"><label>商家名称<input name="name" value="${escapeHtml(merchant.name)}" required></label><label>专属网址代号<input name="slug" value="${escapeHtml(merchant.slug)}" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required><small>只可使用小写英文、数字及连字符</small></label><label>商家行业<input name="industry" value="${escapeHtml(merchant.industry)}" required></label><label>评价语言<select name="language"><option value="zh" ${merchant.language === "zh" ? "selected" : ""}>中文</option><option value="en" ${merchant.language === "en" ? "selected" : ""}>English</option><option value="ms" ${merchant.language === "ms" ? "selected" : ""}>Bahasa Melayu</option></select></label><label class="full">官方 Google Review Link<input name="googleReviewLink" type="url" value="${escapeHtml(merchant.google_review_link)}" required></label><label>品牌颜色<input name="primaryColor" value="${escapeHtml(merchant.primary_color || "#2563EB")}" pattern="#[0-9A-Fa-f]{6}" required></label><label>商家 Logo<input name="logo" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG、JPG 或 WebP，最大 2MB</small></label></div><div class="form-actions"><label class="check"><input name="active" type="checkbox" value="1" ${merchant.active === 0 ? "" : "checked"}> 已启用</label><button class="button primary" type="submit">保存商家资料</button></div>`;
+  const passwordRequired = merchant.id ? "" : "required";
+  return `<div class="form-grid"><label>商家名称<input name="name" value="${escapeHtml(merchant.name)}" required></label><label>专属网址代号<input name="slug" value="${escapeHtml(merchant.slug)}" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required><small>只可使用小写英文、数字及连字符</small></label><label>商家行业<input name="industry" value="${escapeHtml(merchant.industry)}" required></label><label>评价语言<select name="language"><option value="zh" ${merchant.language === "zh" ? "selected" : ""}>中文</option><option value="en" ${merchant.language === "en" ? "selected" : ""}>English</option><option value="ms" ${merchant.language === "ms" ? "selected" : ""}>Bahasa Melayu</option></select></label><label class="full">官方 Google Review Link<input name="googleReviewLink" type="url" value="${escapeHtml(merchant.google_review_link)}" required></label><label>品牌颜色<input name="primaryColor" value="${escapeHtml(merchant.primary_color || "#2563EB")}" pattern="#[0-9A-Fa-f]{6}" required></label><label>商家 Logo<input name="logo" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG、JPG 或 WebP，最大 2MB</small></label><label>客户登录电邮<input name="clientEmail" type="email" value="${escapeHtml(merchant.client_email)}" autocomplete="off" required><small>每个商家使用独立登录电邮</small></label><label>客户登录密码<input name="clientPassword" type="password" minlength="8" autocomplete="new-password" ${passwordRequired}><small>${merchant.id ? "留空代表保留现有密码" : "最少8个字符"}</small></label></div><div class="form-actions"><label class="check"><input name="active" type="checkbox" value="1" ${merchant.active === 0 ? "" : "checked"}> 已启用</label><button class="button primary" type="submit">保存商家及客户账号</button></div>`;
 }
 
 app.get("/admin/merchants/new", requireAdmin, (_req, res) => res.send(layout("新增商家", `<a class="back" href="/admin/merchants">← 返回所有商家</a><section class="panel form-panel"><p class="eyebrow">NEW MERCHANT</p><h1>新增商家</h1><p>建立商家后会自动加入评价模板并生成 QR Code。</p><form method="post" action="/admin/merchants" enctype="multipart/form-data">${merchantForm({ language: "zh", primary_color: "#2563EB", active: 1 })}</form></section>`, { admin: true, active: "merchants" })));
@@ -208,7 +310,12 @@ app.get("/admin/merchants/new", requireAdmin, (_req, res) => res.send(layout("�
 app.post("/admin/merchants", requireAdmin, upload.single("logo"), asyncRoute(async (req, res) => {
   const merchantId = id();
   const language = ["zh", "en", "ms"].includes(req.body.language) ? req.body.language : "zh";
-  await pool.query("INSERT INTO merchants (id,name,slug,industry,language,google_review_link,primary_color,logo_mime,logo_data,active) VALUES (?,?,?,?,?,?,?,?,?,?)", [merchantId, req.body.name, req.body.slug, req.body.industry, language, req.body.googleReviewLink, req.body.primaryColor, req.file?.mimetype || null, req.file?.buffer || null, req.body.active ? 1 : 0]);
+  const clientEmail = String(req.body.clientEmail || "").trim().toLowerCase();
+  const clientPassword = String(req.body.clientPassword || "");
+  if (!clientEmail) return validationError(res, "请填写客户登录电邮。", "/admin/merchants/new");
+  if (clientPassword.length < 8) return validationError(res, "客户登录密码必须至少8个字符。", "/admin/merchants/new");
+  const clientPasswordHash = hashPassword(clientPassword);
+  await pool.query("INSERT INTO merchants (id,name,slug,industry,language,google_review_link,primary_color,client_email,client_password_hash,logo_mime,logo_data,active) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [merchantId, req.body.name, req.body.slug, req.body.industry, language, req.body.googleReviewLink, req.body.primaryColor, clientEmail, clientPasswordHash, req.file?.mimetype || null, req.file?.buffer || null, req.body.active ? 1 : 0]);
   for (const templateLanguage of ["en", "zh", "ms"]) {
     for (const content of defaultTemplates[templateLanguage]) await pool.query("INSERT INTO review_templates (id,merchant_id,language,content) VALUES (?,?,?,?)", [id(), merchantId, templateLanguage, content]);
   }
@@ -226,12 +333,17 @@ app.get("/admin/merchants/:id/edit", requireAdmin, asyncRoute(async (req, res) =
   const statMap = Object.fromEntries(stats.map((row) => [row.type, Number(row.total)]));
   const qr = await QRCode.toDataURL(`${publicBase()}/r/${merchant.slug}`, { width: 360, margin: 2 });
   const templateRows = templates.map((t) => `<div class="template-row"><span class="language-badge">${languageName(t.language)}</span><p>${escapeHtml(t.content)}</p><form method="post" action="/admin/templates/${t.id}/delete"><input type="hidden" name="merchantId" value="${merchant.id}"><button class="icon-danger" type="submit" aria-label="删除评价">×</button></form></div>`).join("");
-  res.send(layout(merchant.name, `<a class="back" href="/admin/merchants">← 返回所有商家</a>${req.query.created ? `<div class="notice success">商家已经建立。</div>` : ""}<header class="page-head"><div><p class="eyebrow">MERCHANT CONTROL</p><h1>${escapeHtml(merchant.name)}</h1><p>管理品牌资料、评价内容和顾客入口。</p></div></header><div class="merchant-layout"><div><section class="panel form-panel"><h2>商家资料</h2><form method="post" action="/admin/merchants/${merchant.id}" enctype="multipart/form-data">${merchantForm(merchant)}</form></section><section class="panel form-panel"><h2>评价资料库</h2><p>客户选择语言后，系统只会抽取相同语言的评价；每新增一条评价一次性扣 10 分。</p><form class="template-add" method="post" action="/admin/templates"><input type="hidden" name="merchantId" value="${merchant.id}"><select name="language" aria-label="评价语言"><option value="en">English</option><option value="zh">中文</option><option value="ms">Bahasa Melayu</option></select><textarea name="content" maxlength="500" required placeholder="输入评价模板，可使用【商家名称】或【Business Name】。"></textarea><button class="button primary" type="submit">添加评价 · 扣10分</button></form>${templateRows}</section></div><aside><section class="panel qr-card"><p class="eyebrow">MERCHANT QR</p><h2>专属 QR Code</h2><img src="${qr}" alt="${escapeHtml(merchant.name)} QR Code"><code>${publicBase()}/r/${escapeHtml(merchant.slug)}</code><a class="button primary" download="${escapeHtml(merchant.slug)}-qr.png" href="${qr}">下载 QR Code</a></section><section class="dark-card"><p class="eyebrow">LIVE DATA</p><h2>互动统计</h2><div><span><b>${statMap.scan || 0}</b><small>扫描</small></span><span><b>${statMap.generate || 0}</b><small>生成</small></span><span><b>${statMap.redirect || 0}</b><small>跳转</small></span></div></section></aside></div>`, { admin: true, active: "merchants" }));
+  res.send(layout(merchant.name, `<a class="back" href="/admin/merchants">← 返回所有商家</a>${req.query.created ? `<div class="notice success">商家已经建立。</div>` : ""}<header class="page-head"><div><p class="eyebrow">MERCHANT CONTROL</p><h1>${escapeHtml(merchant.name)}</h1><p>管理品牌资料、客户登录、评价内容和顾客入口。</p></div></header><div class="merchant-layout"><div><section class="panel form-panel"><h2>商家与客户账号</h2><form method="post" action="/admin/merchants/${merchant.id}" enctype="multipart/form-data">${merchantForm(merchant)}</form></section><section class="panel form-panel"><h2>评价资料库</h2><p>客户选择语言后，系统只会抽取相同语言的评价；首3条自定义评价免费，第4条开始每条一次性扣10分。</p><form class="template-add" method="post" action="/admin/templates"><input type="hidden" name="merchantId" value="${merchant.id}"><select name="language" aria-label="评价语言"><option value="en">English</option><option value="zh">中文</option><option value="ms">Bahasa Melayu</option></select><textarea name="content" maxlength="500" required placeholder="输入评价模板，可使用【商家名称】或【Business Name】。"></textarea><button class="button primary" type="submit">添加自定义评价</button></form>${templateRows}</section></div><aside><section class="panel qr-card"><p class="eyebrow">MERCHANT QR</p><h2>专属 QR Code</h2><img src="${qr}" alt="${escapeHtml(merchant.name)} QR Code"><code>${publicBase()}/r/${escapeHtml(merchant.slug)}</code><a class="button primary" download="${escapeHtml(merchant.slug)}-qr.png" href="${qr}">下载 QR Code</a></section><section class="dark-card"><p class="eyebrow">LIVE DATA</p><h2>互动统计</h2><div><span><b>${statMap.scan || 0}</b><small>扫描</small></span><span><b>${statMap.generate || 0}</b><small>生成</small></span><span><b>${statMap.redirect || 0}</b><small>跳转</small></span></div></section></aside></div>`, { admin: true, active: "merchants" }));
 }));
 
 app.post("/admin/merchants/:id", requireAdmin, upload.single("logo"), asyncRoute(async (req, res) => {
-  const params = [req.body.name, req.body.slug, req.body.industry, req.body.language, req.body.googleReviewLink, req.body.primaryColor, req.body.active ? 1 : 0];
-  let sql = "UPDATE merchants SET name=?,slug=?,industry=?,language=?,google_review_link=?,primary_color=?,active=?";
+  const clientEmail = String(req.body.clientEmail || "").trim().toLowerCase();
+  const clientPassword = String(req.body.clientPassword || "");
+  if (!clientEmail) return validationError(res, "请填写客户登录电邮。", `/admin/merchants/${req.params.id}/edit`);
+  if (clientPassword && clientPassword.length < 8) return validationError(res, "新客户密码必须至少8个字符。", `/admin/merchants/${req.params.id}/edit`);
+  const params = [req.body.name, req.body.slug, req.body.industry, req.body.language, req.body.googleReviewLink, req.body.primaryColor, clientEmail, req.body.active ? 1 : 0];
+  let sql = "UPDATE merchants SET name=?,slug=?,industry=?,language=?,google_review_link=?,primary_color=?,client_email=?,active=?";
+  if (clientPassword) { sql += ",client_password_hash=?"; params.push(hashPassword(clientPassword)); }
   if (req.file) { sql += ",logo_mime=?,logo_data=?"; params.push(req.file.mimetype, req.file.buffer); }
   sql += " WHERE id=?"; params.push(req.params.id);
   await pool.query(sql, params);
@@ -240,19 +352,7 @@ app.post("/admin/merchants/:id", requireAdmin, upload.single("logo"), asyncRoute
 
 app.post("/admin/merchants/:id/delete", requireAdmin, asyncRoute(async (req, res) => { await pool.query("DELETE FROM merchants WHERE id=?", [req.params.id]); res.redirect("/admin/merchants"); }));
 app.post("/admin/templates", requireAdmin, asyncRoute(async (req, res) => {
-  const language = ["en", "zh", "ms"].includes(req.body.language) ? req.body.language : "en";
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-    await connection.query("INSERT INTO review_templates (id,merchant_id,language,content) VALUES (?,?,?,?)", [id(), req.body.merchantId, language, req.body.content]);
-    await connection.query("INSERT INTO usage_ledger (id,merchant_id,event_type,language,review_text,points_delta,note) VALUES (?,?,?,?,?,?,'新增评价一次性收费')", [id(), req.body.merchantId, "review_added", language, req.body.content, -10]);
-    await connection.commit();
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  await addCustomReviewTemplate(req.body.merchantId, req.body.language, req.body.content);
   res.redirect(`/admin/merchants/${req.body.merchantId}/edit`);
 }));
 app.post("/admin/templates/:id/delete", requireAdmin, asyncRoute(async (req, res) => { await pool.query("DELETE FROM review_templates WHERE id=?", [req.params.id]); res.redirect(`/admin/merchants/${req.body.merchantId}/edit`); }));
@@ -322,6 +422,106 @@ app.post("/admin/billing/topup", requireAdmin, asyncRoute(async (req, res) => {
   res.redirect(`/admin/billing?toppedUp=${amount}`);
 }));
 
+app.get("/client", requireClient, asyncRoute(async (req, res) => {
+  const merchant = await getClientMerchant(req);
+  if (!merchant) return req.session.destroy(() => res.redirect("/client/login"));
+  const [[summaryRows], [recentRows]] = await Promise.all([
+    pool.query(`SELECT COALESCE(SUM(points_delta),0) balance,
+      COUNT(CASE WHEN event_type='visit' THEN 1 END) visits,
+      COUNT(CASE WHEN event_type='review_generated' THEN 1 END) generated,
+      COUNT(CASE WHEN event_type='review_added' THEN 1 END) reviews_added
+      FROM usage_ledger WHERE merchant_id=?`, [merchant.id]),
+    pool.query("SELECT event_type,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? ORDER BY created_at DESC LIMIT 8", [merchant.id]),
+  ]);
+  const summary = summaryRows[0] || {};
+  const freeRemaining = Math.max(0, 3 - Number(summary.reviews_added || 0));
+  const cards = [["点数余额", `${Number(summary.balance) || 0} 分`, "充值请联系平台管理员"], ["客户进入", Number(summary.visits) || 0, "每次进入扣1分"], ["使用评价", Number(summary.generated) || 0, "客户已生成评价"], ["免费评价", `${freeRemaining} 条`, "第4条起每条扣10分"]];
+  const recent = recentRows.map((row) => `<tr><td>${formatDateTime(row.created_at)}</td><td>${usageLabel(row.event_type)}</td><td>${escapeHtml(row.note || "—")}</td><td class="points ${Number(row.points_delta) < 0 ? "negative" : Number(row.points_delta) > 0 ? "positive" : ""}">${Number(row.points_delta) > 0 ? "+" : ""}${Number(row.points_delta)} 分</td></tr>`).join("");
+  res.send(layout("客户主页", `<header class="page-head"><div><p class="eyebrow">MERCHANT DASHBOARD</p><h1>${escapeHtml(merchant.name)}</h1><p>管理您的商家资料、评价内容及客户报告。</p></div><a class="button primary" target="_blank" href="/r/${encodeURIComponent(merchant.slug)}">打开客户评价页</a></header><section class="stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="quick-grid"><a href="/client/merchant"><b>商家资料</b><span>更新行业、Google Review Link、品牌颜色及Logo →</span></a><a href="/client/reviews"><b>评价资料库</b><span>管理英文、中文及马来文评价 →</span></a><a href="/client/reports"><b>客户报告</b><span>按月份浏览及下载CSV →</span></a></section><section class="panel"><div class="panel-head"><h2>最近记录</h2><p>您账号最近的使用和点数变化</p></div>${recent ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>项目</th><th>说明</th><th>点数</th></tr></thead><tbody>${recent}</tbody></table></div>` : `<div class="empty">还没有使用记录</div>`}</section>`, { client: merchant, active: "dashboard" }));
+}));
+
+app.get("/client/merchant", requireClient, asyncRoute(async (req, res) => {
+  const merchant = await getClientMerchant(req);
+  if (!merchant) return req.session.destroy(() => res.redirect("/client/login"));
+  const notice = req.query.saved ? `<div class="notice success">商家资料已经更新。</div>` : "";
+  res.send(layout("商家资料", `<header class="page-head"><div><p class="eyebrow">MERCHANT PROFILE</p><h1>商家资料</h1><p>商家名称和专属网址代号由平台管理，不可自行更改。</p></div></header>${notice}<section class="panel form-panel"><form method="post" action="/client/merchant" enctype="multipart/form-data"><div class="form-grid"><label>商家名称<input value="${escapeHtml(merchant.name)}" readonly><small>如需修改，请联系平台管理员</small></label><label>专属网址代号<input value="${escapeHtml(merchant.slug)}" readonly><small>此代号已锁定</small></label><label>商家行业<input name="industry" value="${escapeHtml(merchant.industry)}" required></label><label>客户登录电邮<input value="${escapeHtml(merchant.client_email)}" readonly><small>登录资料由平台管理员控制</small></label><label class="full">官方 Google Review Link<input name="googleReviewLink" type="url" value="${escapeHtml(merchant.google_review_link)}" required></label><label>品牌颜色<input name="primaryColor" value="${escapeHtml(merchant.primary_color)}" pattern="#[0-9A-Fa-f]{6}" required></label><label>商家 Logo<input name="logo" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG、JPG 或 WebP，最大2MB</small></label></div><div class="form-actions"><span class="locked-note">🔒 名称及网址代号已锁定</span><button class="button primary" type="submit">保存商家资料</button></div></form></section>`, { client: merchant, active: "merchant" }));
+}));
+
+app.post("/client/merchant", requireClient, upload.single("logo"), asyncRoute(async (req, res) => {
+  const merchant = await getClientMerchant(req);
+  if (!merchant) return req.session.destroy(() => res.redirect("/client/login"));
+  const params = [String(req.body.industry || "").trim(), req.body.googleReviewLink, req.body.primaryColor];
+  let sql = "UPDATE merchants SET industry=?,google_review_link=?,primary_color=?";
+  if (req.file) { sql += ",logo_mime=?,logo_data=?"; params.push(req.file.mimetype, req.file.buffer); }
+  sql += " WHERE id=?";
+  params.push(merchant.id);
+  await pool.query(sql, params);
+  res.redirect("/client/merchant?saved=1");
+}));
+
+app.get("/client/reviews", requireClient, asyncRoute(async (req, res) => {
+  const merchant = await getClientMerchant(req);
+  if (!merchant) return req.session.destroy(() => res.redirect("/client/login"));
+  const [[templates], [countRows], [balanceRows]] = await Promise.all([
+    pool.query("SELECT * FROM review_templates WHERE merchant_id=? ORDER BY language,created_at DESC", [merchant.id]),
+    pool.query("SELECT COUNT(*) total FROM usage_ledger WHERE merchant_id=? AND event_type='review_added'", [merchant.id]),
+    pool.query("SELECT COALESCE(SUM(points_delta),0) balance FROM usage_ledger WHERE merchant_id=?", [merchant.id]),
+  ]);
+  const additionCount = Number(countRows[0]?.total || 0);
+  const nextNumber = additionCount + 1;
+  const nextCharge = nextNumber <= 3 ? "免费" : "扣10分";
+  const templateRows = templates.map((template) => `<div class="template-row"><span class="language-badge">${languageName(template.language)}</span><p>${escapeHtml(template.content)}</p><form method="post" action="/client/reviews/${template.id}/delete" onsubmit="return confirm('确定删除这条评价？已扣除的点数不会退回。')"><button class="icon-danger" type="submit" aria-label="删除评价">×</button></form></div>`).join("");
+  const created = req.query.added ? `<div class="notice success">第 ${Number(req.query.added)} 条自定义评价已添加，${Number(req.query.points) === 0 ? "本次免费" : "已扣10分"}。</div>` : "";
+  res.send(layout("评价资料库", `<header class="page-head"><div><p class="eyebrow">REVIEW LIBRARY</p><h1>评价资料库</h1><p>自定义评价首3条免费，第4条开始每新增一条一次性扣10分。</p></div><strong class="balance ${Number(balanceRows[0]?.balance) < 0 ? "low" : ""}">${Number(balanceRows[0]?.balance) || 0}<small>余额／分</small></strong></header>${created}<section class="panel form-panel"><h2>添加第 ${nextNumber} 条自定义评价 · ${nextCharge}</h2><form class="template-add" method="post" action="/client/reviews"><select name="language" aria-label="评价语言"><option value="en">English</option><option value="zh">中文</option><option value="ms">Bahasa Melayu</option></select><textarea name="content" maxlength="500" required placeholder="输入评价，可使用【商家名称】或【Business Name】。"></textarea><button class="button primary" type="submit">添加评价 · ${nextCharge}</button></form></section><section class="panel form-panel"><h2>现有评价</h2><p>系统提供的三语基础评价不会占用首3条免费额度。</p>${templateRows || `<div class="empty">还没有评价</div>`}</section>`, { client: merchant, active: "reviews" }));
+}));
+
+app.post("/client/reviews", requireClient, asyncRoute(async (req, res) => {
+  const merchant = await getClientMerchant(req);
+  if (!merchant) return req.session.destroy(() => res.redirect("/client/login"));
+  const result = await addCustomReviewTemplate(merchant.id, req.body.language, req.body.content);
+  res.redirect(`/client/reviews?added=${result.additionNumber}&points=${result.points}`);
+}));
+
+app.post("/client/reviews/:id/delete", requireClient, asyncRoute(async (req, res) => {
+  await pool.query("DELETE FROM review_templates WHERE id=? AND merchant_id=?", [req.params.id, req.session.clientMerchantId]);
+  res.redirect("/client/reviews");
+}));
+
+app.get("/client/reports", requireClient, asyncRoute(async (req, res) => {
+  const merchant = await getClientMerchant(req);
+  if (!merchant) return req.session.destroy(() => res.redirect("/client/login"));
+  const month = validMonth(req.query.month);
+  const [start, end] = monthBounds(month);
+  const [[summaryRows], [records], [balanceRows]] = await Promise.all([
+    pool.query(`SELECT COUNT(CASE WHEN event_type='visit' THEN 1 END) visits,
+      COUNT(DISTINCT CASE WHEN event_type='visit' THEN visitor_hash END) unique_visitors,
+      COUNT(CASE WHEN event_type='review_generated' THEN 1 END) generated,
+      COUNT(CASE WHEN event_type='review_added' THEN 1 END) added,
+      COALESCE(-SUM(CASE WHEN points_delta<0 THEN points_delta ELSE 0 END),0) points_used
+      FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<?`, [merchant.id, start, end]),
+    pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC", [merchant.id, start, end]),
+    pool.query("SELECT COALESCE(SUM(points_delta),0) balance FROM usage_ledger WHERE merchant_id=?", [merchant.id]),
+  ]);
+  const summary = summaryRows[0] || {};
+  const filters = `<form class="report-filters client-report-filter" method="get"><label>选择月份<input type="month" name="month" value="${month}" required></label><button class="button primary" type="submit">查看报告</button><a class="button" href="/client/reports.csv?month=${month}">下载 CSV</a></form>`;
+  const cards = [["进入次数", Number(summary.visits) || 0, "每次进入扣1分"], ["独立访客", Number(summary.unique_visitors) || 0, "匿名装置统计"], ["使用评价", Number(summary.generated) || 0, "生成评价次数"], ["本月使用", `${Number(summary.points_used) || 0} 分`, `余额 ${Number(balanceRows[0]?.balance) || 0} 分`]];
+  const rows = records.map((record) => `<tr><td>${formatDateTime(record.created_at)}</td><td>${usageLabel(record.event_type)}</td><td>${record.language ? languageName(record.language) : "—"}</td><td class="review-copy">${escapeHtml(record.review_text || record.note || "—")}</td><td class="points ${Number(record.points_delta) < 0 ? "negative" : Number(record.points_delta) > 0 ? "positive" : ""}">${Number(record.points_delta) > 0 ? "+" : ""}${Number(record.points_delta)} 分</td></tr>`).join("");
+  res.send(layout("客户报告", `<header class="page-head"><div><p class="eyebrow">CUSTOMER REPORT</p><h1>客户报告</h1><p>浏览及下载 ${escapeHtml(merchant.name)} 的月份报告。</p></div></header><section class="panel report-panel">${filters}</section><section class="stats report-stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="panel"><div class="panel-head"><h2>${month} 使用记录</h2><p>客户访问、使用评价及点数记录</p></div>${rows ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>记录</th><th>语言</th><th>使用的评价／说明</th><th>点数</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">此月份还没有记录</div>`}</section>`, { client: merchant, active: "reports" }));
+}));
+
+app.get("/client/reports.csv", requireClient, asyncRoute(async (req, res) => {
+  const merchant = await getClientMerchant(req);
+  if (!merchant) return req.session.destroy(() => res.redirect("/client/login"));
+  const month = validMonth(req.query.month);
+  const [start, end] = monthBounds(month);
+  const [records] = await pool.query("SELECT event_type,language,review_text,points_delta,note,created_at FROM usage_ledger WHERE merchant_id=? AND created_at>=? AND created_at<? ORDER BY created_at", [merchant.id, start, end]);
+  const header = ["Date & Time", "Type", "Language", "Review / Note", "Points"];
+  const csv = [header, ...records.map((record) => [formatDateTime(record.created_at), usageLabel(record.event_type), record.language ? languageName(record.language) : "", record.review_text || record.note || "", Number(record.points_delta)])].map((row) => row.map(csvCell).join(",")).join("\r\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${merchant.slug}-${month}-report.csv"`);
+  res.send(`\uFEFF${csv}`);
+}));
+
 app.get("/admin/qr-codes", requireAdmin, asyncRoute(async (_req, res) => {
   const [rows] = await pool.query("SELECT id,name,slug FROM merchants ORDER BY created_at DESC");
   const cards = await Promise.all(rows.map(async (m) => ({ ...m, qr: await QRCode.toDataURL(`${publicBase()}/r/${m.slug}`, { width: 320, margin: 2 }) })));
@@ -389,8 +589,8 @@ app.post("/api/events", asyncRoute(async (req, res) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
-  const message = error?.code === "ER_DUP_ENTRY" ? "网址代号已经被使用，请更换后再试。" : "系统暂时无法完成操作，请稍后重试。";
+  const message = error?.code === "ER_DUP_ENTRY" ? "网址代号或客户登录电邮已经使用，请更换后再试。" : "系统暂时无法完成操作，请稍后重试。";
   res.status(error?.code === "ER_DUP_ENTRY" ? 409 : 500).send(layout("系统提示", `<main class="login-page"><section class="login-card"><h1>${message}</h1><a class="button primary" href="/admin">返回管理后台</a></section></main>`));
 });
 
-initDatabase().then(ensureAllTemplateLanguages).then(() => app.listen(port, "0.0.0.0", () => console.log(`Google Review Assistant listening on ${port}`))).catch((error) => { console.error(error); process.exit(1); });
+initDatabase().then(ensureAllTemplateLanguages).then(normalizeReviewAdditionCharges).then(() => app.listen(port, "0.0.0.0", () => console.log(`Google Review Assistant listening on ${port}`))).catch((error) => { console.error(error); process.exit(1); });

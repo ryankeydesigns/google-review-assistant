@@ -20,6 +20,9 @@ The application creates its tables automatically on first successful startup. Me
 - `/admin` — dashboard
 - `/admin/reports` — monthly merchant usage reports and CSV export
 - `/admin/billing` — point balance, usage charges and manual top-ups
+- `/client/login` — separate merchant customer login
+- `/client` — merchant dashboard for profile, review library and reports
+- `/client/reports.csv?month=YYYY-MM` — signed-in merchant monthly CSV report
 - `/r/:slug` — public merchant review assistant
 
 Production URL: `https://google-review.ryankey.com.my`
@@ -30,6 +33,8 @@ The system does not select a rating or publish a Google review on behalf of a cu
 
 - RM1 equals 1 point.
 - Each first entry to a merchant review page deducts 1 point.
-- Each review template added by an administrator deducts 10 points once.
+- The first three custom review templates per merchant are free; the fourth and each later addition deducts 10 points once.
 - Manual top-up packages are RM100, RM500, RM800 and RM1,200.
+- Only the platform administrator can top up points or change a merchant's locked name, URL slug, login email and password.
+- Merchant passwords are stored as salted scrypt hashes and can only be reset, never viewed.
 - Generated review text is stored for monthly reporting; visitor identities are counted with a one-way anonymous hash rather than a raw IP address.
