@@ -1331,3 +1331,49 @@ textarea:focus {
     padding: 22px;
   }
 }
+
+
+.review-steps {
+  margin: 22px 0 4px;
+  padding: 20px;
+  border: 1px solid #dbe7ff;
+  border-radius: 18px;
+  background: #f7faff;
+  text-align: left;
+}
+.review-steps h3 {
+  margin: 0 0 16px;
+  font-size: 17px;
+}
+.review-steps ol {
+  display: grid;
+  gap: 13px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: review-step;
+}
+.review-steps li {
+  position: relative;
+  min-height: 30px;
+  padding-left: 42px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  counter-increment: review-step;
+}
+.review-steps li::before {
+  content: counter(review-step);
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brand, var(--blue));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
