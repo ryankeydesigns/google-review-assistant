@@ -60,6 +60,7 @@ const whatsappNumber = (value) => {
   const digits = String(value || "").replace(/\D/g, "");
   return digits.startsWith("0") ? `60${digits.slice(1)}` : digits;
 };
+const merchantPortalPath = (merchant, suffix = "") => `/client/${encodeURIComponent(merchant.slug)}${suffix}`;
 
 const navItems = [
   ["overview", "/admin", "总览"],
@@ -72,10 +73,10 @@ const navItems = [
   ["settings", "/admin/settings", "设置"],
 ];
 const clientNavItems = [
-  ["dashboard", "/client", "主页"],
-  ["merchant", "/client/merchant", "商家资料"],
-  ["reviews", "/client/reviews", "评价资料库"],
-  ["reports", "/client/reports", "客户报告"],
+  ["dashboard", "", "主页"],
+  ["merchant", "/merchant", "商家资料"],
+  ["reviews", "/reviews", "评价资料库"],
+  ["reports", "/reports", "客户报告"],
 ];
 
 const currentMonth = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit" }).format(new Date());
@@ -189,8 +190,11 @@ function layout(title, content, options = {}) {
   const documentLanguage = options.lang || "zh-Hans";
   let shell = content;
   if (admin) shell = `<div class="admin-shell"><aside class="sidebar"><a class="brand" href="/admin"><span class="brand-mark">R</span><span><b>REVIEW CONTROL</b><small>RyanKey Designs</small></span></a><nav>${navItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(process.env.ADMIN_EMAIL || "Administrator")}</b><small>Platform Owner</small><form method="post" action="/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
-  if (client) shell = `<div class="admin-shell client-shell"><aside class="sidebar"><a class="brand" href="/client"><span class="brand-mark">R</span><span><b>MERCHANT PORTAL</b><small>Google Review Assistant</small></span></a><nav>${clientNavItems.map(([key, href, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${href}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(client.name)}</b><small>${escapeHtml(client.client_email || "Client Account")}</small><form method="post" action="/client/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
-  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=10"></head><body>${shell}</body></html>`;
+  if (client) {
+    const clientBase = merchantPortalPath(client);
+    shell = `<div class="admin-shell client-shell"><aside class="sidebar"><a class="brand" href="${clientBase}"><span class="brand-mark">R</span><span><b>MERCHANT PORTAL</b><small>Google Review Assistant</small></span></a><nav>${clientNavItems.map(([key, suffix, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${clientBase}${suffix}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(client.name)}</b><small>${escapeHtml(client.client_email || "Client Account")}</small><form method="post" action="${clientBase}/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
+  }
+  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=11"></head><body>${shell}</body></html>`;
 }
 
 function requireAdmin(req, res, next) {
@@ -198,17 +202,23 @@ function requireAdmin(req, res, next) {
   res.redirect(`/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
 }
 
-function requireClient(req, res, next) {
-  if (req.session.clientMerchantId) return next();
-  res.redirect(`/client/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
-}
+const requireClient = asyncRoute(async (req, res, next) => {
+  const [rows] = await pool.query("SELECT * FROM merchants WHERE slug=? AND active=1 LIMIT 1", [req.params.slug]);
+  const merchant = rows[0];
+  if (!merchant) return res.status(404).send(layout("找不到商家后台", `<main class="login-page"><section class="login-card"><h1>找不到商家后台</h1><p>请向平台管理员索取正确的专属网址。</p></section></main>`));
+  if (req.session.clientMerchantId !== merchant.id) return res.redirect(`${merchantPortalPath(merchant)}?returnTo=${encodeURIComponent(req.originalUrl)}`);
+  req.clientMerchant = merchant;
+  next();
+});
 
 function clearClientLogin(req, res) {
   delete req.session.clientMerchantId;
-  req.session.save(() => res.redirect("/client/login"));
+  const back = req.params.slug && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(req.params.slug) ? `/client/${req.params.slug}` : "/client";
+  req.session.save(() => res.redirect(back));
 }
 
 async function getClientMerchant(req) {
+  if (req.clientMerchant) return req.clientMerchant;
   const [rows] = await pool.query("SELECT * FROM merchants WHERE id=? LIMIT 1", [req.session.clientMerchantId]);
   return rows[0] || null;
 }
@@ -216,8 +226,9 @@ async function getClientMerchant(req) {
 function safeReturnTo(value) {
   return typeof value === "string" && value.startsWith("/") && !value.startsWith("//") ? value : "/admin";
 }
-function safeClientReturnTo(value) {
-  return typeof value === "string" && (value === "/client" || value.startsWith("/client/")) ? value : "/client";
+function safeClientReturnTo(value, slug) {
+  const clientBase = `/client/${slug}`;
+  return typeof value === "string" && (value === clientBase || value.startsWith(`${clientBase}/`)) ? value : clientBase;
 }
 
 async function initDatabase() {
@@ -365,47 +376,37 @@ app.post("/logout", (req, res) => {
   req.session.save(() => res.redirect("/login"));
 });
 
-function clientLoginMarkup(req, merchant = null) {
-  const loginPath = merchant ? `/client/login/${encodeURIComponent(merchant.slug)}` : "/client/login";
+function clientLoginMarkup(req, merchant) {
+  const loginPath = merchantPortalPath(merchant);
   const error = req.query.error ? `<div class="notice error">客户电邮或密码不正确。</div>` : "";
-  const heading = merchant ? `${escapeHtml(merchant.name)} 客户登录` : "客户登录";
-  const intro = merchant ? `登录后管理 ${escapeHtml(merchant.name)} 的商家资料、评价资料库及客户报告。` : "管理您的商家资料、评价资料库及客户报告。";
-  return layout(merchant ? `${merchant.name} 客户登录` : "客户登录", `<main class="login-page"><section class="login-card"><span class="brand-mark large">R</span><p class="eyebrow">MERCHANT PORTAL</p><h1>${heading}</h1><p>${intro}</p>${error}<form method="post" action="/client/login" class="form-stack"><input type="hidden" name="returnTo" value="${escapeHtml(safeClientReturnTo(req.query.returnTo))}"><input type="hidden" name="loginPath" value="${escapeHtml(loginPath)}">${merchant ? `<input type="hidden" name="merchantId" value="${escapeHtml(merchant.id)}">` : ""}<label>客户电邮<input name="email" type="email" autocomplete="username" required></label><label>密码<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">登录客户主页</button></form><small>Powered by RyanKey Designs</small></section></main>`);
+  return layout(`${merchant.name} 客户登录`, `<main class="login-page"><section class="login-card"><span class="brand-mark large">R</span><p class="eyebrow">MERCHANT PORTAL</p><h1>${escapeHtml(merchant.name)} 客户登录</h1><p>这是 ${escapeHtml(merchant.name)} 的专属后台。登录后可管理商家资料、评价资料库及客户报告。</p>${error}<form method="post" action="${loginPath}/login" class="form-stack"><input type="hidden" name="returnTo" value="${escapeHtml(safeClientReturnTo(req.query.returnTo, merchant.slug))}"><label>客户电邮<input name="email" type="email" autocomplete="username" required></label><label>密码<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">登录客户主页</button></form><small>专属网址：${escapeHtml(loginPath)} · Powered by RyanKey Designs</small></section></main>`);
 }
 
 app.get("/client/login", (req, res) => {
-  if (req.session.clientMerchantId) return res.redirect("/client");
-  res.send(clientLoginMarkup(req));
+  res.redirect("/client");
 });
 
 app.get("/client/login/:slug", asyncRoute(async (req, res) => {
-  if (req.session.clientMerchantId) return res.redirect("/client");
-  const [rows] = await pool.query("SELECT id,name,slug FROM merchants WHERE slug=? LIMIT 1", [req.params.slug]);
-  if (!rows[0]) return res.status(404).send(layout("找不到商家登录页", `<main class="login-page"><section class="login-card"><h1>找不到商家登录页</h1><a class="button primary" href="/client/login">返回客户登录</a></section></main>`));
-  res.send(clientLoginMarkup(req, rows[0]));
+  res.redirect(301, `/client/${encodeURIComponent(req.params.slug)}`);
 }));
 
-app.post("/client/login", asyncRoute(async (req, res) => {
+app.post("/client/:slug/login", asyncRoute(async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
-  const merchantId = String(req.body.merchantId || "");
-  const loginPath = /^\/client\/login\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(req.body.loginPath || "")) ? String(req.body.loginPath) : "/client/login";
-  const [rows] = merchantId
-    ? await pool.query("SELECT id,client_password_hash FROM merchants WHERE id=? AND LOWER(client_email)=? LIMIT 1", [merchantId, email])
-    : await pool.query("SELECT id,client_password_hash FROM merchants WHERE LOWER(client_email)=? LIMIT 1", [email]);
+  const [rows] = await pool.query("SELECT id,name,slug,client_password_hash FROM merchants WHERE slug=? AND active=1 AND LOWER(client_email)=? LIMIT 1", [req.params.slug, email]);
   const merchant = rows[0];
-  if (!merchant || !verifyPassword(req.body.password, merchant.client_password_hash)) return res.redirect(`${loginPath}?error=1&returnTo=${encodeURIComponent(safeClientReturnTo(req.body.returnTo))}`);
+  if (!merchant || !verifyPassword(req.body.password, merchant.client_password_hash)) return res.redirect(`/client/${encodeURIComponent(req.params.slug)}?error=1&returnTo=${encodeURIComponent(safeClientReturnTo(req.body.returnTo, req.params.slug))}`);
   const admin = req.session.admin === true;
   req.session.regenerate((error) => {
     if (error) return res.status(500).send("Unable to start session");
     req.session.clientMerchantId = merchant.id;
     if (admin) req.session.admin = true;
-    res.redirect(safeClientReturnTo(req.body.returnTo));
+    res.redirect(safeClientReturnTo(req.body.returnTo, merchant.slug));
   });
 }));
 
-app.post("/client/logout", (req, res) => {
+app.post("/client/:slug/logout", (req, res) => {
   delete req.session.clientMerchantId;
-  req.session.save(() => res.redirect("/client/login"));
+  req.session.save(() => res.redirect(`/client/${encodeURIComponent(req.params.slug)}`));
 });
 
 app.get("/admin", requireAdmin, asyncRoute(async (_req, res) => {
@@ -510,7 +511,7 @@ function merchantForm(merchant = {}) {
 }
 
 function merchantLoginSharePanel(req, merchant) {
-  const loginUrl = `${publicBase()}/client/login/${encodeURIComponent(merchant.slug)}`;
+  const loginUrl = `${publicBase()}${merchantPortalPath(merchant)}`;
   const shared = req.session.loginShare?.merchantId === merchant.id ? req.session.loginShare : null;
   if (shared) delete req.session.loginShare;
   const message = shared ? `您好，以下是 ${merchant.name} 的客户管理登录资料：\n登录网址：${loginUrl}\n登录电邮：${merchant.client_email}\n客户电话：${merchant.client_phone || "未填写"}\n登录密码：${shared.password}\n\n登录后可管理商家资料、评价资料库及下载客户报告。` : "";
@@ -520,7 +521,7 @@ function merchantLoginSharePanel(req, merchant) {
 
 function topupDialog(merchant) {
   const options = Object.values(topupPackages).map((item) => `<button type="submit" name="amount" value="${item.amount}"><b>RM${item.amount}</b><span>${item.bonus ? `${item.amount} + ${item.bonus} 赠送分` : `${item.points} 分`}</span><strong>获得 ${item.points} 分</strong></button>`).join("");
-  return `<dialog id="topupDialog" class="topup-dialog"><form method="dialog"><button class="dialog-close" aria-label="关闭">×</button></form><p class="eyebrow">TOP UP POINTS</p><h2>选择充值点数</h2><p>RM1 = 1分。选择后会记录申请，并打开 WhatsApp 联系平台管理员。</p><form method="post" action="/client/billing/request"><label class="topup-phone">客户电话号码<input name="clientPhone" type="tel" maxlength="30" value="${escapeHtml(merchant.client_phone)}" required placeholder="例如：+6012-3456789"></label><div class="topup-package-grid">${options}</div></form><div class="topup-contact"><span>申请商家</span><b>${escapeHtml(merchant.name)}</b><span>${escapeHtml(merchant.client_email || "未填写电邮")}</span></div></dialog>`;
+  return `<dialog id="topupDialog" class="topup-dialog"><form method="dialog"><button class="dialog-close" aria-label="关闭">×</button></form><p class="eyebrow">TOP UP POINTS</p><h2>选择充值点数</h2><p>RM1 = 1分。选择后会记录申请，并打开 WhatsApp 联系平台管理员。</p><form method="post" action="${merchantPortalPath(merchant, "/billing/request")}"><label class="topup-phone">客户电话号码<input name="clientPhone" type="tel" maxlength="30" value="${escapeHtml(merchant.client_phone)}" required placeholder="例如：+6012-3456789"></label><div class="topup-package-grid">${options}</div></form><div class="topup-contact"><span>申请商家</span><b>${escapeHtml(merchant.name)}</b><span>${escapeHtml(merchant.client_email || "未填写电邮")}</span></div></dialog>`;
 }
 
 app.get("/admin/merchants/new", requireAdmin, (_req, res) => res.send(layout("新增商家", `<a class="back" href="/admin/merchants">← 返回所有商家</a><section class="panel form-panel"><p class="eyebrow">NEW MERCHANT</p><h1>新增商家</h1><p>建立商家后会自动加入评价模板并生成 QR Code。</p><form method="post" action="/admin/merchants" enctype="multipart/form-data">${merchantForm({ language: "zh", primary_color: "#2563EB", active: 1 })}</form></section>`, { admin: true, active: "merchants" })));
@@ -644,7 +645,7 @@ function topupSuccessButton(transaction) {
   const phone = whatsappNumber(transaction.client_phone);
   if (!phone) return `<span class="status">缺少电话</span>`;
   const fee = String(transaction.note || "").match(/RM[\d,]+/)?.[0] || "未注明";
-  const message = `您好 ${transaction.name}，您的 Google Review Assistant 点数已经充值成功。\n\n客户电邮：${transaction.client_email || "未填写"}\n充值费用：${fee}\n充值点数：${Number(transaction.points_delta)}分\n充值时间：${formatDateTime(transaction.created_at)}\n目前点数余额：${Number(transaction.current_balance)}分\n\n请返回客户评价资料库刷新页面：\n${publicBase()}/client/reviews\n\n谢谢。`;
+  const message = `您好 ${transaction.name}，您的 Google Review Assistant 点数已经充值成功。\n\n客户电邮：${transaction.client_email || "未填写"}\n充值费用：${fee}\n充值点数：${Number(transaction.points_delta)}分\n充值时间：${formatDateTime(transaction.created_at)}\n目前点数余额：${Number(transaction.current_balance)}分\n\n请返回客户评价资料库刷新页面：\n${publicBase()}/client/${encodeURIComponent(transaction.slug)}/reviews\n\n谢谢。`;
   return `<a class="button small whatsapp" target="_blank" rel="noopener" href="https://wa.me/${phone}?text=${encodeURIComponent(message)}">WhatsApp通知</a>`;
 }
 
@@ -655,7 +656,7 @@ app.get("/admin/billing", requireAdmin, asyncRoute(async (req, res) => {
       COUNT(CASE WHEN u.event_type='review_added' THEN 1 END) reviews_added,
       COALESCE(-SUM(CASE WHEN u.points_delta<0 THEN u.points_delta ELSE 0 END),0) points_used
       FROM merchants m LEFT JOIN usage_ledger u ON u.merchant_id=m.id GROUP BY m.id ORDER BY m.name`),
-    pool.query(`SELECT u.event_type,u.points_delta,u.note,u.created_at,m.name,m.client_email,m.client_phone,
+    pool.query(`SELECT u.event_type,u.points_delta,u.note,u.created_at,m.name,m.slug,m.client_email,m.client_phone,
       (SELECT COALESCE(SUM(balance_entry.points_delta),0) FROM usage_ledger balance_entry WHERE balance_entry.merchant_id=u.merchant_id) current_balance
       FROM usage_ledger u JOIN merchants m ON m.id=u.merchant_id
       WHERE u.event_type IN ('topup','topup_request','review_generated','review_added') ORDER BY u.created_at DESC LIMIT 50`),
@@ -673,9 +674,21 @@ app.post("/admin/billing/topup", requireAdmin, asyncRoute(async (req, res) => {
   res.redirect(`/admin/billing?toppedUp=${selectedPackage.points}`);
 }));
 
-app.get("/client", requireClient, asyncRoute(async (req, res) => {
-  const merchant = await getClientMerchant(req);
-  if (!merchant) return clearClientLogin(req, res);
+app.get("/client", asyncRoute(async (req, res) => {
+  if (req.session.clientMerchantId) {
+    const [rows] = await pool.query("SELECT slug FROM merchants WHERE id=? AND active=1 LIMIT 1", [req.session.clientMerchantId]);
+    if (rows[0]) return res.redirect(merchantPortalPath(rows[0]));
+  }
+  res.status(403).send(layout("请使用商家专属后台", `<main class="login-page"><section class="login-card"><span class="brand-mark large">R</span><p class="eyebrow">MERCHANT PORTAL</p><h1>请使用商家专属后台</h1><p>每个商家都有不同的后台网址。请使用平台管理员发送给您的专属连接登录。</p><small>例如：${escapeHtml(publicBase())}/client/client-name</small></section></main>`));
+}));
+
+app.get("/client/:slug", asyncRoute(async (req, res) => {
+  const [merchantRows] = await pool.query("SELECT * FROM merchants WHERE slug=? AND active=1 LIMIT 1", [req.params.slug]);
+  const merchant = merchantRows[0];
+  if (!merchant) return res.status(404).send(layout("找不到商家后台", `<main class="login-page"><section class="login-card"><h1>找不到商家后台</h1><p>请向平台管理员索取正确的专属网址。</p></section></main>`));
+  if (req.session.clientMerchantId !== merchant.id) return res.send(clientLoginMarkup(req, merchant));
+  req.clientMerchant = merchant;
+  const clientBase = merchantPortalPath(merchant);
   const [[summaryRows], [recentRows]] = await Promise.all([
     pool.query(`SELECT COALESCE(SUM(points_delta),0) balance,
       COUNT(CASE WHEN event_type='visit' THEN 1 END) visits,
@@ -688,33 +701,36 @@ app.get("/client", requireClient, asyncRoute(async (req, res) => {
   const freeRemaining = Math.max(0, 3 - Number(summary.reviews_added || 0));
   const cards = [["点数余额", `${Number(summary.balance) || 0} 分`, "充值请联系平台管理员"], ["客户进入", Number(summary.visits) || 0, "只统计，不扣点数"], ["使用评价", Number(summary.generated) || 0, "每次生成扣1分"], ["免费评价", `${freeRemaining} 条`, "第4条起每条扣10分"]];
   const recent = recentRows.map((row) => `<tr><td>${formatDateTime(row.created_at)}</td><td>${usageLabel(row.event_type)}</td><td>${escapeHtml(row.note || "—")}</td><td class="points ${Number(row.points_delta) < 0 ? "negative" : Number(row.points_delta) > 0 ? "positive" : ""}">${Number(row.points_delta) > 0 ? "+" : ""}${Number(row.points_delta)} 分</td></tr>`).join("");
-  res.send(layout("客户主页", `<header class="page-head"><div><p class="eyebrow">MERCHANT DASHBOARD</p><h1>${escapeHtml(merchant.name)}</h1><p>管理您的商家资料、评价内容及客户报告。</p></div><a class="button primary" target="_blank" href="/r/${encodeURIComponent(merchant.slug)}">打开客户评价页</a></header><section class="stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="quick-grid"><a href="/client/merchant"><b>商家资料</b><span>更新行业、Google Review Link、品牌颜色及Logo →</span></a><a href="/client/reviews"><b>评价资料库</b><span>管理英文、中文及马来文评价 →</span></a><a href="/client/reports"><b>客户报告</b><span>按月份浏览及下载CSV →</span></a></section><section class="panel"><div class="panel-head"><h2>最近记录</h2><p>您账号最近的使用和点数变化</p></div>${recent ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>项目</th><th>说明</th><th>点数</th></tr></thead><tbody>${recent}</tbody></table></div>` : `<div class="empty">还没有使用记录</div>`}</section>`, { client: merchant, active: "dashboard" }));
+  res.send(layout("客户主页", `<header class="page-head"><div><p class="eyebrow">MERCHANT DASHBOARD</p><h1>${escapeHtml(merchant.name)}</h1><p>管理您的商家资料、评价内容及客户报告。</p></div><a class="button primary" target="_blank" href="/r/${encodeURIComponent(merchant.slug)}">打开客户评价页</a></header><section class="stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="quick-grid"><a href="${clientBase}/merchant"><b>商家资料</b><span>更新行业、Google Review Link、品牌颜色及Logo →</span></a><a href="${clientBase}/reviews"><b>评价资料库</b><span>管理英文、中文及马来文评价 →</span></a><a href="${clientBase}/reports"><b>客户报告</b><span>按月份浏览及下载CSV →</span></a></section><section class="panel"><div class="panel-head"><h2>最近记录</h2><p>您账号最近的使用和点数变化</p></div>${recent ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>项目</th><th>说明</th><th>点数</th></tr></thead><tbody>${recent}</tbody></table></div>` : `<div class="empty">还没有使用记录</div>`}</section>`, { client: merchant, active: "dashboard" }));
 }));
 
-app.get("/client/merchant", requireClient, asyncRoute(async (req, res) => {
+app.get("/client/:slug/merchant", requireClient, asyncRoute(async (req, res) => {
   const merchant = await getClientMerchant(req);
   if (!merchant) return clearClientLogin(req, res);
+  const clientBase = merchantPortalPath(merchant);
   const notice = req.query.saved ? `<div class="notice success">商家资料已经更新。</div>` : req.query.phoneRequired ? `<div class="notice error">请先填写客户电话号码，才能发送充值申请。</div>` : "";
-  res.send(layout("商家资料", `<header class="page-head"><div><p class="eyebrow">MERCHANT PROFILE</p><h1>商家资料</h1><p>商家名称和专属网址代号由平台管理，不可自行更改。</p></div></header>${notice}<section class="panel form-panel"><form method="post" action="/client/merchant" enctype="multipart/form-data"><div class="form-grid"><label>商家名称<input value="${escapeHtml(merchant.name)}" readonly><small>如需修改，请联系平台管理员</small></label><label>专属网址代号<input value="${escapeHtml(merchant.slug)}" readonly><small>此代号已锁定</small></label><label>商家行业<input name="industry" value="${escapeHtml(merchant.industry)}" required></label><label>客户登录电邮<input value="${escapeHtml(merchant.client_email)}" readonly><small>登录资料由平台管理员控制</small></label><label>客户电话号码<input name="clientPhone" type="tel" maxlength="30" value="${escapeHtml(merchant.client_phone)}" required><small>用于充值申请及平台联系</small></label><label class="full">官方 Google Review Link<input name="googleReviewLink" type="url" value="${escapeHtml(merchant.google_review_link)}" required></label><label>品牌颜色<input name="primaryColor" value="${escapeHtml(merchant.primary_color)}" pattern="#[0-9A-Fa-f]{6}" required></label><label>商家 Logo<input name="logo" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG、JPG 或 WebP，最大2MB</small></label></div><div class="form-actions"><span class="locked-note">🔒 名称及网址代号已锁定</span><button class="button primary" type="submit">保存商家资料</button></div></form></section>`, { client: merchant, active: "merchant" }));
+  res.send(layout("商家资料", `<header class="page-head"><div><p class="eyebrow">MERCHANT PROFILE</p><h1>商家资料</h1><p>商家名称和专属网址代号由平台管理，不可自行更改。</p></div></header>${notice}<section class="panel form-panel"><form method="post" action="${clientBase}/merchant" enctype="multipart/form-data"><div class="form-grid"><label>商家名称<input value="${escapeHtml(merchant.name)}" readonly><small>如需修改，请联系平台管理员</small></label><label>专属网址代号<input value="${escapeHtml(merchant.slug)}" readonly><small>此代号已锁定</small></label><label>商家行业<input name="industry" value="${escapeHtml(merchant.industry)}" required></label><label>客户登录电邮<input value="${escapeHtml(merchant.client_email)}" readonly><small>登录资料由平台管理员控制</small></label><label>客户电话号码<input name="clientPhone" type="tel" maxlength="30" value="${escapeHtml(merchant.client_phone)}" required><small>用于充值申请及平台联系</small></label><label class="full">官方 Google Review Link<input name="googleReviewLink" type="url" value="${escapeHtml(merchant.google_review_link)}" required></label><label>品牌颜色<input name="primaryColor" value="${escapeHtml(merchant.primary_color)}" pattern="#[0-9A-Fa-f]{6}" required></label><label>商家 Logo<input name="logo" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG、JPG 或 WebP，最大2MB</small></label></div><div class="form-actions"><span class="locked-note">🔒 名称及网址代号已锁定</span><button class="button primary" type="submit">保存商家资料</button></div></form></section>`, { client: merchant, active: "merchant" }));
 }));
 
-app.post("/client/merchant", requireClient, upload.single("logo"), asyncRoute(async (req, res) => {
+app.post("/client/:slug/merchant", requireClient, upload.single("logo"), asyncRoute(async (req, res) => {
   const merchant = await getClientMerchant(req);
   if (!merchant) return clearClientLogin(req, res);
+  const clientBase = merchantPortalPath(merchant);
   const clientPhone = String(req.body.clientPhone || "").trim().slice(0, 30);
-  if (!clientPhone) return validationError(res, "请填写客户电话号码。", "/client/merchant");
+  if (!clientPhone) return validationError(res, "请填写客户电话号码。", `${clientBase}/merchant`);
   const params = [String(req.body.industry || "").trim(), clientPhone, req.body.googleReviewLink, req.body.primaryColor];
   let sql = "UPDATE merchants SET industry=?,client_phone=?,google_review_link=?,primary_color=?";
   if (req.file) { sql += ",logo_mime=?,logo_data=?"; params.push(req.file.mimetype, req.file.buffer); }
   sql += " WHERE id=?";
   params.push(merchant.id);
   await pool.query(sql, params);
-  res.redirect("/client/merchant?saved=1");
+  res.redirect(`${clientBase}/merchant?saved=1`);
 }));
 
-app.get("/client/reviews", requireClient, asyncRoute(async (req, res) => {
+app.get("/client/:slug/reviews", requireClient, asyncRoute(async (req, res) => {
   const merchant = await getClientMerchant(req);
   if (!merchant) return clearClientLogin(req, res);
+  const clientBase = merchantPortalPath(merchant);
   const [[templates], [countRows], [balanceRows]] = await Promise.all([
     pool.query("SELECT * FROM review_templates WHERE merchant_id=? ORDER BY language,created_at DESC", [merchant.id]),
     pool.query("SELECT COUNT(*) total FROM usage_ledger WHERE merchant_id=? AND event_type='review_added'", [merchant.id]),
@@ -725,31 +741,33 @@ app.get("/client/reviews", requireClient, asyncRoute(async (req, res) => {
   const nextCharge = nextNumber <= 3 ? "免费" : "扣10分";
   const balance = Number(balanceRows[0]?.balance || 0);
   const lowBalance = balance <= 10;
-  const templateRows = templates.map((template) => `<div class="template-row"><span class="language-badge">${languageName(template.language)}</span><p>${escapeHtml(template.content)}</p><form method="post" action="/client/reviews/${template.id}/delete" onsubmit="return confirm('确定删除这条评价？已扣除的点数不会退回。')"><button class="icon-danger" type="submit" aria-label="删除评价">×</button></form></div>`).join("");
+  const templateRows = templates.map((template) => `<div class="template-row"><span class="language-badge">${languageName(template.language)}</span><p>${escapeHtml(template.content)}</p><form method="post" action="${clientBase}/reviews/${template.id}/delete" onsubmit="return confirm('确定删除这条评价？已扣除的点数不会退回。')"><button class="icon-danger" type="submit" aria-label="删除评价">×</button></form></div>`).join("");
   const created = req.query.added ? `<div class="notice success">第 ${Number(req.query.added)} 条自定义评价已添加，${Number(req.query.points) === 0 ? "本次免费" : "已扣10分"}。</div>` : "";
-  res.send(layout("评价资料库", `<header class="page-head"><div><p class="eyebrow">REVIEW LIBRARY</p><h1>评价资料库</h1><p>自定义评价首3条免费，第4条开始每新增一条一次性扣10分。</p></div><strong class="balance ${lowBalance ? "low" : ""}">${balance}<small>余额／分</small></strong></header>${created}${lowBalance ? `<section class="balance-warning"><div><b>余额只剩 ${balance} 分，现已暂停新增评价。</b><span>请先提交充值申请；平台管理员确认后会为您的账户添加点数。</span></div><button class="button primary" type="button" onclick="document.getElementById(&quot;topupDialog&quot;).showModal()">选择充值点数</button></section>${topupDialog(merchant)}<section class="panel form-panel locked-review-form"><h2>新增评价已暂停</h2><p>余额必须高于10分才可继续添加评价，包括首3条免费评价。</p><button class="button" type="button" onclick="document.getElementById(&quot;topupDialog&quot;).showModal()">充值后继续</button></section>` : `<section class="panel form-panel"><h2>添加第 ${nextNumber} 条自定义评价 · ${nextCharge}</h2><form class="template-add" method="post" action="/client/reviews"><select name="language" aria-label="评价语言"><option value="en">English</option><option value="zh">中文</option><option value="ms">Bahasa Melayu</option></select><textarea name="content" maxlength="500" required placeholder="输入评价，可使用【商家名称】或【Business Name】。"></textarea><button class="button primary" type="submit">添加评价 · ${nextCharge}</button></form></section>`}<section class="panel form-panel"><h2>现有评价</h2><p>系统提供的三语基础评价不会占用首3条免费额度。</p>${templateRows || `<div class="empty">还没有评价</div>`}</section>`, { client: merchant, active: "reviews" }));
+  res.send(layout("评价资料库", `<header class="page-head"><div><p class="eyebrow">REVIEW LIBRARY</p><h1>评价资料库</h1><p>自定义评价首3条免费，第4条开始每新增一条一次性扣10分。</p></div><strong class="balance ${lowBalance ? "low" : ""}">${balance}<small>余额／分</small></strong></header>${created}${lowBalance ? `<section class="balance-warning"><div><b>余额只剩 ${balance} 分，现已暂停新增评价。</b><span>请先提交充值申请；平台管理员确认后会为您的账户添加点数。</span></div><button class="button primary" type="button" onclick="document.getElementById(&quot;topupDialog&quot;).showModal()">选择充值点数</button></section>${topupDialog(merchant)}<section class="panel form-panel locked-review-form"><h2>新增评价已暂停</h2><p>余额必须高于10分才可继续添加评价，包括首3条免费评价。</p><button class="button" type="button" onclick="document.getElementById(&quot;topupDialog&quot;).showModal()">充值后继续</button></section>` : `<section class="panel form-panel"><h2>添加第 ${nextNumber} 条自定义评价 · ${nextCharge}</h2><form class="template-add" method="post" action="${clientBase}/reviews"><select name="language" aria-label="评价语言"><option value="en">English</option><option value="zh">中文</option><option value="ms">Bahasa Melayu</option></select><textarea name="content" maxlength="500" required placeholder="输入评价，可使用【商家名称】或【Business Name】。"></textarea><button class="button primary" type="submit">添加评价 · ${nextCharge}</button></form></section>`}<section class="panel form-panel"><h2>现有评价</h2><p>系统提供的三语基础评价不会占用首3条免费额度。</p>${templateRows || `<div class="empty">还没有评价</div>`}</section>`, { client: merchant, active: "reviews" }));
 }));
 
-app.post("/client/reviews", requireClient, asyncRoute(async (req, res) => {
+app.post("/client/:slug/reviews", requireClient, asyncRoute(async (req, res) => {
   const merchant = await getClientMerchant(req);
   if (!merchant) return clearClientLogin(req, res);
+  const clientBase = merchantPortalPath(merchant);
   try {
     const result = await addCustomReviewTemplate(merchant.id, req.body.language, req.body.content);
-    res.redirect(`/client/reviews?added=${result.additionNumber}&points=${result.points}`);
+    res.redirect(`${clientBase}/reviews?added=${result.additionNumber}&points=${result.points}`);
   } catch (error) {
-    if (error.code === "LOW_BALANCE") return res.redirect("/client/reviews?lowBalance=1");
+    if (error.code === "LOW_BALANCE") return res.redirect(`${clientBase}/reviews?lowBalance=1`);
     throw error;
   }
 }));
 
-app.post("/client/billing/request", requireClient, asyncRoute(async (req, res) => {
+app.post("/client/:slug/billing/request", requireClient, asyncRoute(async (req, res) => {
   const merchant = await getClientMerchant(req);
   if (!merchant) return clearClientLogin(req, res);
+  const reviewsPath = merchantPortalPath(merchant, "/reviews");
   const selectedPackage = topupPackages[String(req.body.amount || "")];
   if (!selectedPackage) return res.status(400).send("Invalid top-up package");
-  if (!adminWhatsapp()) return validationError(res, "平台充值WhatsApp尚未设置，请联系管理员。", "/client/reviews");
+  if (!adminWhatsapp()) return validationError(res, "平台充值WhatsApp尚未设置，请联系管理员。", reviewsPath);
   const clientPhone = String(req.body.clientPhone || "").trim().slice(0, 30);
-  if (!clientPhone) return validationError(res, "请填写客户电话号码。", "/client/reviews");
+  if (!clientPhone) return validationError(res, "请填写客户电话号码。", reviewsPath);
   await pool.query("UPDATE merchants SET client_phone=? WHERE id=?", [clientPhone, merchant.id]);
   const packageText = selectedPackage.bonus ? `RM${selectedPackage.amount} + ${selectedPackage.bonus}赠送分` : `RM${selectedPackage.amount}`;
   const message = `您好 Ryan，我想申请充值 Google Review Assistant 点数。\n\n商家名称：${merchant.name}\n客户电邮：${merchant.client_email || "未填写"}\n客户电话：${clientPhone}\n选择配套：${packageText}\n获得点数：${selectedPackage.points}分\n目前状态：等待平台管理员确认及回复。`;
@@ -757,14 +775,17 @@ app.post("/client/billing/request", requireClient, asyncRoute(async (req, res) =
   res.redirect(`https://wa.me/${adminWhatsapp()}?text=${encodeURIComponent(message)}`);
 }));
 
-app.post("/client/reviews/:id/delete", requireClient, asyncRoute(async (req, res) => {
-  await pool.query("DELETE FROM review_templates WHERE id=? AND merchant_id=?", [req.params.id, req.session.clientMerchantId]);
-  res.redirect("/client/reviews");
-}));
-
-app.get("/client/reports", requireClient, asyncRoute(async (req, res) => {
+app.post("/client/:slug/reviews/:id/delete", requireClient, asyncRoute(async (req, res) => {
   const merchant = await getClientMerchant(req);
   if (!merchant) return clearClientLogin(req, res);
+  await pool.query("DELETE FROM review_templates WHERE id=? AND merchant_id=?", [req.params.id, req.session.clientMerchantId]);
+  res.redirect(merchantPortalPath(merchant, "/reviews"));
+}));
+
+app.get("/client/:slug/reports", requireClient, asyncRoute(async (req, res) => {
+  const merchant = await getClientMerchant(req);
+  if (!merchant) return clearClientLogin(req, res);
+  const clientBase = merchantPortalPath(merchant);
   const month = validMonth(req.query.month);
   const [start, end] = monthBounds(month);
   const [[summaryRows], [records], [balanceRows]] = await Promise.all([
@@ -778,13 +799,13 @@ app.get("/client/reports", requireClient, asyncRoute(async (req, res) => {
     pool.query("SELECT COALESCE(SUM(points_delta),0) balance FROM usage_ledger WHERE merchant_id=?", [merchant.id]),
   ]);
   const summary = summaryRows[0] || {};
-  const filters = `<form class="report-filters client-report-filter" method="get"><label>选择月份<input type="month" name="month" value="${month}" required></label><button class="button primary" type="submit">查看报告</button><a class="button" href="/client/reports.csv?month=${month}">下载 CSV</a></form>`;
+  const filters = `<form class="report-filters client-report-filter" method="get" action="${clientBase}/reports"><label>选择月份<input type="month" name="month" value="${month}" required></label><button class="button primary" type="submit">查看报告</button><a class="button" href="${clientBase}/reports.csv?month=${month}">下载 CSV</a></form>`;
   const cards = [["进入次数", Number(summary.visits) || 0, "只统计，不扣点数"], ["独立访客", Number(summary.unique_visitors) || 0, "匿名装置统计"], ["使用评价", Number(summary.generated) || 0, "每次生成扣1分"], ["本月使用", `${Number(summary.points_used) || 0} 分`, `余额 ${Number(balanceRows[0]?.balance) || 0} 分`]];
   const rows = records.map((record) => `<tr><td>${formatDateTime(record.created_at)}</td><td>${usageLabel(record.event_type)}</td><td>${record.language ? languageName(record.language) : "—"}</td><td class="review-copy">${escapeHtml(record.review_text || record.note || "—")}</td><td class="points ${Number(record.points_delta) < 0 ? "negative" : Number(record.points_delta) > 0 ? "positive" : ""}">${Number(record.points_delta) > 0 ? "+" : ""}${Number(record.points_delta)} 分</td></tr>`).join("");
   res.send(layout("客户报告", `<header class="page-head"><div><p class="eyebrow">CUSTOMER REPORT</p><h1>客户报告</h1><p>浏览及下载 ${escapeHtml(merchant.name)} 的月份报告。</p></div></header><section class="panel report-panel">${filters}</section><section class="stats report-stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="panel"><div class="panel-head"><h2>${month} 使用记录</h2><p>客户访问、使用评价及点数记录</p></div>${rows ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>记录</th><th>语言</th><th>使用的评价／说明</th><th>点数</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">此月份还没有记录</div>`}</section>`, { client: merchant, active: "reports" }));
 }));
 
-app.get("/client/reports.csv", requireClient, asyncRoute(async (req, res) => {
+app.get("/client/:slug/reports.csv", requireClient, asyncRoute(async (req, res) => {
   const merchant = await getClientMerchant(req);
   if (!merchant) return clearClientLogin(req, res);
   const month = validMonth(req.query.month);

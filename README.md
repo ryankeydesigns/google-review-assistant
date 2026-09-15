@@ -21,10 +21,11 @@ The application creates its tables automatically on first successful startup. Me
 - `/admin/reports` — monthly merchant usage reports and CSV export
 - `/admin/analytics` — daily, monthly and yearly usage, merchant growth, review-rate and completed top-up-rate charts
 - `/admin/billing` — point balance, usage charges and manual top-ups
-- `/client/login` — separate merchant customer login
-- `/client/login/:slug` — merchant-specific customer login URL
-- `/client` — merchant dashboard for profile, review library and reports
-- `/client/reports.csv?month=YYYY-MM` — signed-in merchant monthly CSV report
+- `/client/:slug` — unique merchant login and dashboard URL
+- `/client/:slug/merchant` — signed-in merchant profile
+- `/client/:slug/reviews` — signed-in merchant review library
+- `/client/:slug/reports` — signed-in merchant reports
+- `/client/:slug/reports.csv?month=YYYY-MM` — signed-in merchant monthly CSV report
 - `/r/:slug` — public merchant review assistant
 
 Production URL: `https://google-review.ryankey.com.my`
