@@ -44,6 +44,7 @@ The system does not select a rating or publish a Google review on behalf of a cu
 - Every completed administrator top-up record provides a WhatsApp success button with the fee, points, time, current balance and merchant review-library refresh link.
 - Only the platform administrator can top up points or change a merchant's locked name, URL slug, login email and password.
 - Merchant passwords are stored as salted scrypt hashes and can only be reset, never viewed.
-- Administrator and merchant identities can stay signed in simultaneously in the same browser session.
+- Administrator and multiple merchant identities can stay signed in simultaneously in the same browser session; each merchant login is isolated by its unique slug.
+- Each merchant dashboard displays and downloads its own customer review QR Code.
 - The administrator can reset a merchant password and receive a one-time copy/WhatsApp sharing panel containing the login URL, email and new password.
 - Generated review text is stored for monthly reporting; visitor identities are counted with a one-way anonymous hash rather than a raw IP address.

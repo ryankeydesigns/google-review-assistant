@@ -61,6 +61,16 @@ const whatsappNumber = (value) => {
   return digits.startsWith("0") ? `60${digits.slice(1)}` : digits;
 };
 const merchantPortalPath = (merchant, suffix = "") => `/client/${encodeURIComponent(merchant.slug)}${suffix}`;
+const clientLogins = (req) => {
+  const stored = req.session.clientLogins;
+  return stored && typeof stored === "object" && !Array.isArray(stored) ? { ...stored } : {};
+};
+const isClientLoggedIn = (req, merchant) => clientLogins(req)[merchant.slug] === merchant.id || req.session.clientMerchantId === merchant.id;
+const rememberClientLogin = (req, merchant) => {
+  req.session.clientLogins = { ...clientLogins(req), [merchant.slug]: merchant.id };
+  req.session.lastClientSlug = merchant.slug;
+  delete req.session.clientMerchantId;
+};
 
 const navItems = [
   ["overview", "/admin", "总览"],
@@ -194,7 +204,7 @@ function layout(title, content, options = {}) {
     const clientBase = merchantPortalPath(client);
     shell = `<div class="admin-shell client-shell"><aside class="sidebar"><a class="brand" href="${clientBase}"><span class="brand-mark">R</span><span><b>MERCHANT PORTAL</b><small>Google Review Assistant</small></span></a><nav>${clientNavItems.map(([key, suffix, label]) => `<a class="nav-link ${active === key ? "active" : ""}" href="${clientBase}${suffix}">${label}</a>`).join("")}</nav><div class="sidebar-foot"><b>${escapeHtml(client.name)}</b><small>${escapeHtml(client.client_email || "Client Account")}</small><form method="post" action="${clientBase}/logout"><button class="logout" type="submit">退出登录</button></form></div></aside><main class="admin-main">${content}</main></div>`;
   }
-  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=11"></head><body>${shell}</body></html>`;
+  return `<!doctype html><html lang="${documentLanguage}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · RyanKey Designs</title><meta name="description" content="Google Review Assistant by RyanKey Designs"><meta name="theme-color" content="#2563EB"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="icon" type="image/png" sizes="512x512" href="/site-icon.png?v=2"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2"><link rel="stylesheet" href="/style.css?v=12"></head><body>${shell}</body></html>`;
 }
 
 function requireAdmin(req, res, next) {
@@ -206,20 +216,27 @@ const requireClient = asyncRoute(async (req, res, next) => {
   const [rows] = await pool.query("SELECT * FROM merchants WHERE slug=? AND active=1 LIMIT 1", [req.params.slug]);
   const merchant = rows[0];
   if (!merchant) return res.status(404).send(layout("找不到商家后台", `<main class="login-page"><section class="login-card"><h1>找不到商家后台</h1><p>请向平台管理员索取正确的专属网址。</p></section></main>`));
-  if (req.session.clientMerchantId !== merchant.id) return res.redirect(`${merchantPortalPath(merchant)}?returnTo=${encodeURIComponent(req.originalUrl)}`);
+  if (!isClientLoggedIn(req, merchant)) return res.redirect(`${merchantPortalPath(merchant)}?returnTo=${encodeURIComponent(req.originalUrl)}`);
+  if (req.session.clientMerchantId === merchant.id) rememberClientLogin(req, merchant);
   req.clientMerchant = merchant;
   next();
 });
 
 function clearClientLogin(req, res) {
-  delete req.session.clientMerchantId;
+  const logins = clientLogins(req);
+  if (req.params.slug) delete logins[req.params.slug];
+  req.session.clientLogins = logins;
+  if (req.session.lastClientSlug === req.params.slug) delete req.session.lastClientSlug;
+  if (!req.clientMerchant || req.session.clientMerchantId === req.clientMerchant.id) delete req.session.clientMerchantId;
   const back = req.params.slug && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(req.params.slug) ? `/client/${req.params.slug}` : "/client";
   req.session.save(() => res.redirect(back));
 }
 
 async function getClientMerchant(req) {
   if (req.clientMerchant) return req.clientMerchant;
-  const [rows] = await pool.query("SELECT * FROM merchants WHERE id=? LIMIT 1", [req.session.clientMerchantId]);
+  const merchantId = clientLogins(req)[req.params.slug];
+  if (!merchantId) return null;
+  const [rows] = await pool.query("SELECT * FROM merchants WHERE id=? LIMIT 1", [merchantId]);
   return rows[0] || null;
 }
 
@@ -362,11 +379,15 @@ app.post("/login", (req, res) => {
   const emailOk = email.length === expectedEmail.length && crypto.timingSafeEqual(Buffer.from(email), Buffer.from(expectedEmail));
   const passwordOk = password.length === expectedPassword.length && crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expectedPassword));
   if (!emailOk || !passwordOk) return res.redirect(`/login?error=1&returnTo=${encodeURIComponent(safeReturnTo(req.body.returnTo))}`);
-  const clientMerchantId = req.session.clientMerchantId;
+  const savedClientLogins = clientLogins(req);
+  const lastClientSlug = req.session.lastClientSlug;
+  const legacyClientMerchantId = req.session.clientMerchantId;
   req.session.regenerate((error) => {
     if (error) return res.status(500).send("Unable to start session");
     req.session.admin = true;
-    if (clientMerchantId) req.session.clientMerchantId = clientMerchantId;
+    if (Object.keys(savedClientLogins).length) req.session.clientLogins = savedClientLogins;
+    if (lastClientSlug) req.session.lastClientSlug = lastClientSlug;
+    if (legacyClientMerchantId) req.session.clientMerchantId = legacyClientMerchantId;
     res.redirect(safeReturnTo(req.body.returnTo));
   });
 });
@@ -396,17 +417,20 @@ app.post("/client/:slug/login", asyncRoute(async (req, res) => {
   const merchant = rows[0];
   if (!merchant || !verifyPassword(req.body.password, merchant.client_password_hash)) return res.redirect(`/client/${encodeURIComponent(req.params.slug)}?error=1&returnTo=${encodeURIComponent(safeClientReturnTo(req.body.returnTo, req.params.slug))}`);
   const admin = req.session.admin === true;
+  const savedClientLogins = clientLogins(req);
+  const legacyClientMerchantId = req.session.clientMerchantId;
   req.session.regenerate((error) => {
     if (error) return res.status(500).send("Unable to start session");
-    req.session.clientMerchantId = merchant.id;
+    req.session.clientLogins = savedClientLogins;
+    rememberClientLogin(req, merchant);
+    if (legacyClientMerchantId && legacyClientMerchantId !== merchant.id) req.session.clientMerchantId = legacyClientMerchantId;
     if (admin) req.session.admin = true;
     res.redirect(safeClientReturnTo(req.body.returnTo, merchant.slug));
   });
 }));
 
-app.post("/client/:slug/logout", (req, res) => {
-  delete req.session.clientMerchantId;
-  req.session.save(() => res.redirect(`/client/${encodeURIComponent(req.params.slug)}`));
+app.post("/client/:slug/logout", requireClient, (req, res) => {
+  clearClientLogin(req, res);
 });
 
 app.get("/admin", requireAdmin, asyncRoute(async (_req, res) => {
@@ -675,8 +699,15 @@ app.post("/admin/billing/topup", requireAdmin, asyncRoute(async (req, res) => {
 }));
 
 app.get("/client", asyncRoute(async (req, res) => {
-  if (req.session.clientMerchantId) {
-    const [rows] = await pool.query("SELECT slug FROM merchants WHERE id=? AND active=1 LIMIT 1", [req.session.clientMerchantId]);
+  const logins = clientLogins(req);
+  const preferredSlug = req.session.lastClientSlug;
+  if (preferredSlug && logins[preferredSlug]) {
+    const [rows] = await pool.query("SELECT id,slug FROM merchants WHERE id=? AND slug=? AND active=1 LIMIT 1", [logins[preferredSlug], preferredSlug]);
+    if (rows[0]) return res.redirect(merchantPortalPath(rows[0]));
+  }
+  const firstLogin = Object.entries(logins)[0];
+  if (firstLogin) {
+    const [rows] = await pool.query("SELECT id,slug FROM merchants WHERE id=? AND slug=? AND active=1 LIMIT 1", [firstLogin[1], firstLogin[0]]);
     if (rows[0]) return res.redirect(merchantPortalPath(rows[0]));
   }
   res.status(403).send(layout("请使用商家专属后台", `<main class="login-page"><section class="login-card"><span class="brand-mark large">R</span><p class="eyebrow">MERCHANT PORTAL</p><h1>请使用商家专属后台</h1><p>每个商家都有不同的后台网址。请使用平台管理员发送给您的专属连接登录。</p><small>例如：${escapeHtml(publicBase())}/client/client-name</small></section></main>`));
@@ -686,9 +717,12 @@ app.get("/client/:slug", asyncRoute(async (req, res) => {
   const [merchantRows] = await pool.query("SELECT * FROM merchants WHERE slug=? AND active=1 LIMIT 1", [req.params.slug]);
   const merchant = merchantRows[0];
   if (!merchant) return res.status(404).send(layout("找不到商家后台", `<main class="login-page"><section class="login-card"><h1>找不到商家后台</h1><p>请向平台管理员索取正确的专属网址。</p></section></main>`));
-  if (req.session.clientMerchantId !== merchant.id) return res.send(clientLoginMarkup(req, merchant));
+  if (!isClientLoggedIn(req, merchant)) return res.send(clientLoginMarkup(req, merchant));
+  if (req.session.clientMerchantId === merchant.id) rememberClientLogin(req, merchant);
   req.clientMerchant = merchant;
   const clientBase = merchantPortalPath(merchant);
+  const reviewUrl = `${publicBase()}/r/${merchant.slug}`;
+  const qr = await QRCode.toDataURL(reviewUrl, { width: 360, margin: 2 });
   const [[summaryRows], [recentRows]] = await Promise.all([
     pool.query(`SELECT COALESCE(SUM(points_delta),0) balance,
       COUNT(CASE WHEN event_type='visit' THEN 1 END) visits,
@@ -701,7 +735,7 @@ app.get("/client/:slug", asyncRoute(async (req, res) => {
   const freeRemaining = Math.max(0, 3 - Number(summary.reviews_added || 0));
   const cards = [["点数余额", `${Number(summary.balance) || 0} 分`, "充值请联系平台管理员"], ["客户进入", Number(summary.visits) || 0, "只统计，不扣点数"], ["使用评价", Number(summary.generated) || 0, "每次生成扣1分"], ["免费评价", `${freeRemaining} 条`, "第4条起每条扣10分"]];
   const recent = recentRows.map((row) => `<tr><td>${formatDateTime(row.created_at)}</td><td>${usageLabel(row.event_type)}</td><td>${escapeHtml(row.note || "—")}</td><td class="points ${Number(row.points_delta) < 0 ? "negative" : Number(row.points_delta) > 0 ? "positive" : ""}">${Number(row.points_delta) > 0 ? "+" : ""}${Number(row.points_delta)} 分</td></tr>`).join("");
-  res.send(layout("客户主页", `<header class="page-head"><div><p class="eyebrow">MERCHANT DASHBOARD</p><h1>${escapeHtml(merchant.name)}</h1><p>管理您的商家资料、评价内容及客户报告。</p></div><a class="button primary" target="_blank" href="/r/${encodeURIComponent(merchant.slug)}">打开客户评价页</a></header><section class="stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="quick-grid"><a href="${clientBase}/merchant"><b>商家资料</b><span>更新行业、Google Review Link、品牌颜色及Logo →</span></a><a href="${clientBase}/reviews"><b>评价资料库</b><span>管理英文、中文及马来文评价 →</span></a><a href="${clientBase}/reports"><b>客户报告</b><span>按月份浏览及下载CSV →</span></a></section><section class="panel"><div class="panel-head"><h2>最近记录</h2><p>您账号最近的使用和点数变化</p></div>${recent ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>项目</th><th>说明</th><th>点数</th></tr></thead><tbody>${recent}</tbody></table></div>` : `<div class="empty">还没有使用记录</div>`}</section>`, { client: merchant, active: "dashboard" }));
+  res.send(layout("客户主页", `<header class="page-head"><div><p class="eyebrow">MERCHANT DASHBOARD</p><h1>${escapeHtml(merchant.name)}</h1><p>管理您的商家资料、评价内容及客户报告。</p></div><a class="button primary" target="_blank" href="/r/${encodeURIComponent(merchant.slug)}">打开客户评价页</a></header><section class="stats">${cards.map(([label, value, note]) => `<article><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`).join("")}</section><section class="quick-grid"><a href="${clientBase}/merchant"><b>商家资料</b><span>更新行业、Google Review Link、品牌颜色及Logo →</span></a><a href="${clientBase}/reviews"><b>评价资料库</b><span>管理英文、中文及马来文评价 →</span></a><a href="${clientBase}/reports"><b>客户报告</b><span>按月份浏览及下载CSV →</span></a></section><section class="panel dashboard-qr"><div><p class="eyebrow">专属 QR CODE</p><h2>${escapeHtml(merchant.name)} 专属 QR Code</h2><p>顾客扫描后会直接进入您的评价生成页面。</p><code>${escapeHtml(reviewUrl)}</code><div class="form-actions"><a class="button primary" target="_blank" href="/r/${encodeURIComponent(merchant.slug)}">打开评价页</a><a class="button" download="${escapeHtml(merchant.slug)}-qr.png" href="${qr}">下载 QR Code</a></div></div><div class="qr-card"><img src="${qr}" alt="${escapeHtml(merchant.name)} 专属 QR Code"></div></section><section class="panel"><div class="panel-head"><h2>最近记录</h2><p>您账号最近的使用和点数变化</p></div>${recent ? `<div class="table-wrap"><table><thead><tr><th>时间</th><th>项目</th><th>说明</th><th>点数</th></tr></thead><tbody>${recent}</tbody></table></div>` : `<div class="empty">还没有使用记录</div>`}</section>`, { client: merchant, active: "dashboard" }));
 }));
 
 app.get("/client/:slug/merchant", requireClient, asyncRoute(async (req, res) => {
@@ -778,7 +812,7 @@ app.post("/client/:slug/billing/request", requireClient, asyncRoute(async (req, 
 app.post("/client/:slug/reviews/:id/delete", requireClient, asyncRoute(async (req, res) => {
   const merchant = await getClientMerchant(req);
   if (!merchant) return clearClientLogin(req, res);
-  await pool.query("DELETE FROM review_templates WHERE id=? AND merchant_id=?", [req.params.id, req.session.clientMerchantId]);
+  await pool.query("DELETE FROM review_templates WHERE id=? AND merchant_id=?", [req.params.id, merchant.id]);
   res.redirect(merchantPortalPath(merchant, "/reviews"));
 }));
 

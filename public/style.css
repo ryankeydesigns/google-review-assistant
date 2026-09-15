@@ -1299,3 +1299,35 @@ textarea:focus {
     grid-row: 2;
   }
 }
+
+
+.dashboard-qr {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  align-items: center;
+  gap: 28px;
+  padding: 28px;
+}
+.dashboard-qr > div:first-child > p:not(.eyebrow) {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+.dashboard-qr code {
+  display: block;
+  margin-top: 18px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.dashboard-qr .form-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.dashboard-qr .qr-card {
+  padding: 0;
+}
+@media (max-width: 620px) {
+  .dashboard-qr {
+    grid-template-columns: 1fr;
+    padding: 22px;
+  }
+}
